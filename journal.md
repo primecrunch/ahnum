@@ -605,3 +605,16 @@ cycles through all four orders against GMP.
 evening were discarded: one ran right after hours of prst work by the distributed client, and one
 overlapped a video call (camera, conferencing and video-encoder processes busy). They gave
 inconsistent results, including 14 × 1 slower than 10 × 1.
+
+## 20:47 — Safety margin 0.1: dropped again
+
+With the tangent DIT kernels in, I re-ran the margin sweep at 12 points (L = 32768, 49152, 98304,
+196608 × k = 3, 255, 9999), 20,000 squarings each. Max round-off:
+- Margin 0.2: 0.25–0.28.
+- Margin 0.1: 0.28–0.375, with 0.344 at L = 32768 k = 3 and 0.375 at L = 49152 k = 255.
+- Margin 0.0: 0.31–0.375.
+
+Last round's six-point sweep showed 0.30–0.31 at margin 0.1. The wider sweep finds worse points,
+and full tests run 30–100× more squarings, so margin 0.1 would sit at the 0.40 retry threshold.
+A retry restarts at a larger FFT and costs far more than the ~0.5–1% saving. `BPW_MARGIN` stays
+at 0.2. The tangent kernels lowered round-off at margin 0.2 but did not move the safe margin.

@@ -1,0 +1,46 @@
+# Speed improvement priorities
+
+Ranked candidates for making ahnum faster. Each item gets an upper-bound measurement first (a
+deliberately wrong build that skips the work), and is dropped if the bound is under ~3% unless
+it is nearly free. Measure on a quiet machine. Results go in `journal.md`; landed gains go in
+the README speed history table.
+
+Reference point: 9001·2^662695−1, FFT 49152, 113 µs per squaring, 74.6 s per test.
+Time split per squaring: pass-1 inverse stages 18%, normaliser 17%, pass-1 forward stages 16%,
+pass-2 forward and inverse stages ~11–12% each, split 10%, row transposes in/out 13%.
+
+## Candidates
+
+1. **Fuse the normaliser with its neighbouring column stages.** Expected 2–5%, uncertain. The
+   normaliser runs at 100% of the FP limit in isolation but ~86% in the loop, and pass-1 inverse
+   stages at ~80%. One kernel per group (last inverse stage + normalise + first forward stage)
+   removes a store/reload and lets butterfly work overlap the carry-chain latency. Measure a
+   bound first.
+2. **Tangent-form twiddles in the forward (DIF) stages.** Expected ~3–4%, large change. The bound
+   for removing all stage twiddle multiplies is 11–14%, and the DIT half gave 2.5–4.6%. DIF needs
+   each stage's output twiddles moved to the next stage's inputs, leftover scales folded into
+   the four-step table, and unscaled values delivered to the split.
+3. **Pass-2 rows-in stage (~77% of the FP limit).** It loads both rows from L2. Look at
+   reordering or a larger first radix so there is more compute per byte loaded. No bound yet.
+
+## Done
+
+- In-place normaliser, {osc, 1/base, base·w} records with 4 carry chains: −2.3 to −3.4%
+  (`3631fc5`).
+- Tangent-form DIT twiddles, radix 2/3/4/8: −2.5 to −4.6% (`3631fc5`).
+- Stage order tuned per FFT length: −0.5 to −2% (`3631fc5`).
+- Pass-2 row transpose fused into the first/last row-FFT stage: −9% (`3780a4b`).
+- Exact fixed-point IBDWT weights, allowing a shorter FFT: −6% (`9dca186`).
+
+## Tried and dropped
+
+- Safety margin 0.1 instead of 0.2 bits/word (2026-10-11): max round-off reaches 0.344–0.375
+  within 20,000 squarings (L = 32768 k = 3, L = 49152 k = 255), too close to the 0.40 retry
+  threshold for full tests, which run 30–100× more squarings.
+- SME radix-8 stages: slower, because handing groups between NEON and SME costs L2 round trips.
+- Fusing the real split into the row FFT: under 2%, since the split is FP-bound.
+- Finer FFT-length granularity: the chosen length averages 2.66% above the minimum.
+- Driver overhead (Gerbicz, setup): 0.75%, nothing to gain.
+- Software prefetch of the next pass-1 group: 2% slower.
+- Split-kernel doubling folds and moving the special pair out of C: ~0.3% each.
+- Compressed weights instead of the table, to cut L2 traffic: slower with 10 tests running.
