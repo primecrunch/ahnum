@@ -23,9 +23,12 @@ pass-2 forward and inverse stages ~11–12% each, split 10%, row transposes in/o
    zero-padded, exact). The CPU loses throughput in proportion to GPU busy time (−7.4% at half
    load, −22% at full; shared power), so CPU + GPU comes to ~+6–7% over CPU alone, assuming
    ~15 µs per squaring for the unbuilt prime-combining, carries and reduction. The lever is GPU
-   kernel efficiency: half the GPU time per squaring would make it ~+25%. Next: Shoup
-   multiplies for twiddles (3 integer multiplies instead of 4); fused radix-2² stages did not
-   help.
+   kernel efficiency: half the GPU time per squaring would make it ~+25%. Ruled out as the
+   kernel's limit: barriers (fused radix-2² stages), integer multiplies (Shoup: 2× slower),
+   twiddle loads (threadgroup-memory twiddles: no change). GPU counters show it is
+   latency-bound (instruction utilization 21% against a 75% limiter, integer pipes ~40%,
+   threadgroup memory 709 GiB/s each way). Next: register-based kernels, 8–16 elements per
+   thread with radix-8/16 sub-transforms and 2–3 threadgroup exchanges per transform.
 
 ## Done
 

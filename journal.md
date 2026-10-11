@@ -798,3 +798,49 @@ and one threadgroup round trip per pair, `AHN_GPU_FUSE=1`) is correct but slower
 where the plain kernel was poorly placed. Fusion keeps every modular multiply, so this points
 to the integer multiplies as the limit: ~2.4M `mul`/`mulhi` per prime-squaring. Next to try:
 Shoup's precomputed-quotient multiply for twiddles (3 multiplies instead of Montgomery's 4).
+
+## 21:50 — GPU kernel: two more hypotheses ruled out
+
+The fusion result suggested the integer multiplies were the limit. Shoup's precomputed-quotient
+multiply for all twiddles (tables of (w, ⌊w·2^32/p⌋) pairs, 3 multiplies instead of Montgomery's
+4) made it **twice as slow**: 5.53 → 10.32 µs at 32768 and 11.76 → 22.06 at 65536. Combined with
+fusion it came back to 5.88. So the multiplies are not the limit, and the fusion reasoning was
+wrong. Doubling the twiddle bytes doubled the time, which looked like twiddle loads from device
+memory. Copying each stage's twiddles into threadgroup memory at kernel start changed little
+(5.53 → 5.31 at 32768, 11.76 → 12.32 at 65536), and Shoup stayed 2× slower with on-chip
+twiddles. Both changes are reverted (the kernel stays as committed in e9db715).
+
+What limits the kernel is not known. Timings alone have not found it: three hypotheses (barriers,
+multiplies, twiddle loads) are ruled out. GPU performance counters (Xcode's Metal System Trace)
+would show it directly, but Xcode is not installed on this machine.
+
+## 22:06 — GPU counters: the NTT kernel is latency-bound
+
+Xcode is now installed. The default Metal System Trace records only one GPU counter (RT unit),
+and the counter set cannot be chosen from the command line. A template saved from Instruments
+with the Metal GPU Counters track set to "Performance Limiters" (`~/metal-limiters.tracetemplate`)
+records 80 counters with `xctrace record --template`. Averaged over the 9017 samples where
+compute kernels ran (prototype at N = 32768, 256 numbers in flight):
+
+| Counter | Value |
+|---|---|
+| Instruction throughput limiter / utilization | 75% / 21% |
+| Integer and complex limiter / utilization | 54% / 39% |
+| Integer and conditional limiter / utilization | 51% / 43% |
+| ALU utilization | 31% |
+| Kernel occupancy | 88% |
+| Compute shader launch limiter / utilization | 96% / 2% |
+| Threadgroup memory read / write bandwidth | 709 / 709 GiB/s |
+| GPU (DRAM) bandwidth | 53 GB/s |
+
+No execution unit is saturated and DRAM is far from its limit. Instructions are queued but
+mostly stalled, and the cores are full, so new threadgroups cannot launch. Each thread does one
+butterfly (a few integer ops) between threadgroup-memory round trips and barriers, 8–15 times per
+transform, and 88% occupancy is not enough to hide that latency. This explains the earlier
+results:
+- Shoup multiplies cut ALU work, which was not the limit, and added memory traffic.
+- Fused radix-2² steps still did little work per barrier.
+
+The usual GPU FFT layout should fix it: each thread holds 8–16 elements in registers, runs a
+radix-8/16 sub-transform there, and exchanges through threadgroup memory 2–3 times per
+transform instead of 8–15.
