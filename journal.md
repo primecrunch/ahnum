@@ -263,3 +263,24 @@ is now the reference benchmark (`tests/benchmarks.csv`, `tools/bench.sh`).
 
 The 195 s comes from the distributed client, which may have been sharing the machine with other
 work at the time, so it is an upper bound rather than a quiet single-core figure.
+
+## 13:35 — One test per core on 9001·2^662695−1
+
+Full Gerbicz-checked PRP runs as separate processes on the quiet machine (all residues matched):
+
+| Concurrent tests | Time per test | Throughput |
+|---|---|---|
+| 1 | 91.6 s | 39 tests/hour |
+| 10 (P-cores) | 121 s | 298 tests/hour |
+| 14 (P- and E-cores) | 156 s | 321 tests/hour |
+
+The squaring-rate samples (`ahbench throughput`) suggested 342 and 385 tests/hour. The full
+runs come out about 15% lower, which is consistent with Gerbicz overhead, context setup and
+sustained all-core clocks.
+
+Each test is 32% slower when all P-cores are busy (91.6 s to 121 s), from shared L2 and power.
+The E-cores add 8%.
+
+Against the reference client's 195 s per test: if it ran one test per P-core, it would manage
+about 185 tests/hour, so ahnum is about 1.6–1.7× on throughput. That assumes the 195 s was
+measured under a comparable load, which is not known.
