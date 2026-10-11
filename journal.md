@@ -636,3 +636,52 @@ runs after the stages (data in L1) or alone (data from L2). Its ~16% shortfall a
 isolated kernel rate is inside the kernel itself. Dropped. (Skipping the normaliser lets the
 values overflow to NaN and inf; Apple's FP units showed no slowdown for that, since B came out
 as consistent as A.)
+
+## 20:57 — Forward (DIF) tangent twiddles: bound 5.3–6.4%, shelved
+
+Bound build: every DIF output-twiddle multiply removed (wrong results), DIT tangent kernels kept.
+µs per squaring, best of 3, quiet machine:
+
+| Number | full | no forward twiddles |
+|---|---|---|
+| 9357·2^369717−1 | 62.8 | 58.8 (−6.4%) |
+| 9001·2^662695−1 | 110.7 | 103.6 (−6.4%) |
+| 8243·2^872226−1 | 150.2 | 141.5 (−5.8%) |
+| 9999·2^1500000−1 | 294.4 | 278.7 (−5.3%) |
+
+On the inverse side, the twiddles sat on the butterfly inputs and saved half their ops, which
+recovered 45–65% of the bound. On the forward side they have to move to the next stage's inputs:
+- That makes p twiddles per butterfly instead of p − 1, so radix 8 saves 12 of 28 twiddle ops
+  and radix 4 saves 4 of 12.
+- Pass 2's last forward stage leaves a per-element scale that has to be multiplied out before
+  the split, about one extra op per point.
+
+Expected net ~1.5–3%, below the 3% bar, for the largest change still on the list. Shelved. The
+remaining rows-in item has a ceiling of ~2 µs (~1.7%) at 49152, so no candidate on the list
+clears the bar any more.
+
+## 21:07 — New candidates: table traffic under load, and what is left
+
+The throughput workload loses 18% per test at 10 concurrent tests (133.5 µs per squaring against
+113 alone). Each squaring streams ~3 MB from L2, about half of it the four-step table (393 KB) and
+the normaliser table (1.15 MB). The bound: both tables made L1-resident (every group reuses group
+0's slice; wrong results, same instructions). One core: 111.3 → 107.7 µs (~3%). Throughput,
+alternating with 90 s cool-downs:
+
+| Run | 10 tests normal | 10 tests hot | 14 tests normal | 14 tests hot |
+|---|---|---|---|---|
+| 1 | 407.0/h | 409.6/h | 422.1/h | 422.2/h |
+| 2 | 397.3/h | 407.5/h | 401.9/h | 416.7/h |
+
+Round 2's normal run fell 2–5% from round 1, which fits the machine warming up, so the bound under
+load is 0–2%. Table traffic is not what slows tests down at full load, and rebuilding tables on
+the fly would cost FP work. Dropped.
+
+Two more ideas reasoned through and not built:
+- **The k penalty.** It comes from the wrapped terms carrying k⁻¹ mod N, and gwnum pays it too.
+- **New radices for finer FFT lengths.** The chosen length already averages only 2.66% above the
+  minimum.
+
+What is left with real size is off the CPU: an integer NTT on the idle GPU running extra tests
+alongside the CPU ones. It is now on the priorities list as a research item; its first step is
+a prototype kernel timed at 49152.

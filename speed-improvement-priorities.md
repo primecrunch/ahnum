@@ -11,12 +11,21 @@ pass-2 forward and inverse stages ~11–12% each, split 10%, row transposes in/o
 
 ## Candidates
 
-1. **Tangent-form twiddles in the forward (DIF) stages.** Expected ~3–4%, large change. The bound
-   for removing all stage twiddle multiplies is 11–14%, and the DIT half gave 2.5–4.6%. DIF needs
-   each stage's output twiddles moved to the next stage's inputs, leftover scales folded into
-   the four-step table, and unscaled values delivered to the split.
+1. **Tangent-form twiddles in the forward (DIF) stages.** Shelved below the bar: bound measured
+   at 5.3–6.4% (2026-10-11, all forward stage twiddle multiplies removed), expected net ~1.5–3%.
+   The output twiddles have to move to the next stage's inputs (p twiddles per butterfly
+   instead of p − 1, so radix 8 saves 12 of 28 twiddle ops and radix 4 saves 4 of 12). Pass 2
+   also needs a scale fix-up before the split (~1 op per point). The DIT half recovered 45–65%
+   of its bound with none of these overheads. Large change.
 2. **Pass-2 rows-in stage (~77% of the FP limit).** It loads both rows from L2. Look at
-   reordering or a larger first radix so there is more compute per byte loaded. No bound yet.
+   reordering or a larger first radix so there is more compute per byte loaded. Ceiling ~2 µs
+   (~1.7%) at 49152 even at the full FP rate, so it is below the bar on its own.
+
+3. **Integer NTT on the GPU, alongside the CPU tests (research).** Apple GPUs have no FP64, but a
+   number-theoretic transform over 32-bit primes (Montgomery multiply, CRT across several
+   primes) in Metal could run extra tests while all CPU cores are busy. It is the only idea
+   left that could add tens of percent of throughput instead of a few. It has no cheap bound:
+   the first step is a prototype NTT-squaring kernel timed against the CPU at 49152.
 
 ## Done
 
@@ -29,6 +38,14 @@ pass-2 forward and inverse stages ~11–12% each, split 10%, row transposes in/o
 
 ## Tried and dropped
 
+- Shrinking or computing the four-step and normaliser tables to cut L2 traffic (2026-10-11):
+  making both L1-resident (wrong results) saves ~3% on one core, but only 0–2% of 10- and
+  14-test throughput, within heat drift. Table traffic is not what slows tests under load, and
+  rebuilding tables on the fly costs FP work.
+- Removing the k penalty in bits/word (reasoned, not built): wrapped terms carry k⁻¹ mod N in
+  the IBDWT with k folded into the base, and gwnum pays the same ~0.5·log2 k bits per word.
+- New radices (6, 9, 12, 16) for finer FFT-length steps (reasoned): the chosen length already
+  averages 2.66% above the minimum.
 - Fusing the normaliser with its neighbouring column stages (2026-10-11): timing pass 1 with the
   normaliser skipped (B) and with the column stages skipped (C) gives B + C − A = 52.5 µs at
   49152, matching pass 2 alone (~53 µs). The joins between phases cost nothing measurable, so
