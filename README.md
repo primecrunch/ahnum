@@ -103,23 +103,44 @@ used. `tune/fft_times_m4pro.txt` holds measurements for this machine.
 splits row pairs across threads. Pass 1 splits column groups; each thread defers its first group
 and fixes it up with the previous range's carries.
 
-## Measured (M4 Pro, 10P+4E)
+## Measured (M4 Pro, 10P+4E, quiet machine)
 
 | number | FFT | config | time/squaring | per test |
 |---|---|---|---|---|
-| 9357·2^369717−1 | 28672 | 1 thread | 70.9 µs | 26.2 s |
-| 9357·2^369717−1 | 28224 | 10 tests × 1 thread | ~100 µs each | ~950–1200 tests/hour |
-| 69·2^24612729−1 | 1638400 | 8 threads | 1.28 ms | ~8.8 h |
+| 9357·2^369717−1 | 28672 | 1 thread | 69 µs | 26 s |
+| 9357·2^369717−1 | 28672 | 10 tests × 1 thread | 86 µs each | 1125 tests/hour |
+| 9357·2^369717−1 | 28672 | 14 tests × 1 thread (P+E) | 110 µs each | 1244 tests/hour |
+| 69·2^24612729−1 | 1638400 | 1 thread | 6.5 ms | 45 h |
+| 69·2^24612729−1 | 1638400 | 10 threads | 0.77 ms | 5.3 h |
 
-The best tests × threads split depends on the FFT size and cache fit. Measure it with
-`ahbench throughput`.
+At n ≈ 370K, splitting a test across threads loses throughput (5×2 gives 892 tests/hour, 1×10
+gives 510), so run one test per core. For record sizes, run one test across all P-cores.
+`ahbench throughput` measures the best split for a given size.
+
+## SME (M4) — measured, not used by default
+
+`--backend sme` runs the pass-1 radix-8 column stages on the SME unit. Each stage becomes 8×8
+complex matrix products (FP64 FMOPA), with the twiddles folded into per-j matrices
+(`ahn_sme_r8`). It is correct (GMP and PrimeCrunch tests pass), but it is slower end to end:
+
+- The FMOPA rate is 492 GFLOPS from one core. A radix-8 stage needs 32 outer products per
+  8-point × 8-lane item, which gives 0.85 cycles/point against 1.3 for NEON in isolation.
+- The SME unit works from L2. Handing a group between NEON (normalisation) and SME (FFT) costs
+  about 400 ns per 8 KB group each way, about 28 cycles per cache line. Normalising in
+  streaming mode is not an option because streaming-SVE vector arithmetic runs at about 15
+  GFLOPS.
+- Result: 96 µs per squaring against 72 µs for NEON at FFT 28672 (35.6 s against 26.7 s for
+  9357·2^369717−1). The unit is also shared by the 5 cores of a cluster, so throughput mode
+  cannot gain from it either.
+
+The probes are in `tools/sme_probe.*`, plus `kbench 4.49 sme` and `kbench 4.49 handoff`.
 
 ## Layout
 
 ```
 include/ahnum.h       public API
 src/ctx.c             layout, weights, carries/fold, FFT length choice, conversions
-src/neon.c            NEON backend (two-pass, threads)
+src/neon.c            NEON backend (two-pass, threads); `sme` variant of it
 src/prp.c             Fermat PRP driver: Gerbicz, round-off fallback, checkpoints
 src/threads.c         fork-join pool
 src/fast2p.c          same algorithm in portable C (independent cross-check)

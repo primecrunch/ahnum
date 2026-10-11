@@ -67,6 +67,7 @@ struct ahn_backend_ops {
 extern const ahn_backend_ops ahn_ref_ops;
 extern const ahn_backend_ops ahn_f2_ops;
 extern const ahn_backend_ops ahn_neon_ops;
+extern const ahn_backend_ops ahn_sme_ops;
 
 // Carry-propagate integer digits (any magnitude < 2^62) into balanced form,
 // wrapping the top carry into digit 0.

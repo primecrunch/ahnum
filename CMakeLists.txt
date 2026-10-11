@@ -13,7 +13,7 @@ find_library(GMP_LIB gmp HINTS /opt/homebrew/opt/gmp/lib)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(ASM_DIR ${CMAKE_BINARY_DIR}/asm)
-set(GEN_ASM ${ASM_DIR}/fft_stages.S ${ASM_DIR}/norm.S ${ASM_DIR}/pass2.S)
+set(GEN_ASM ${ASM_DIR}/fft_stages.S ${ASM_DIR}/norm.S ${ASM_DIR}/pass2.S ${ASM_DIR}/sme.S)
 add_custom_command(
   OUTPUT ${GEN_ASM}
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/gen/gen_kernels.py ${ASM_DIR}
@@ -44,6 +44,8 @@ add_test(NAME gmp_ref_backend COMMAND test_gmp ref)
 add_test(NAME gmp_c2p_backend COMMAND test_gmp c2p)
 add_test(NAME gmp_neon_backend COMMAND test_gmp neon)
 add_test(NAME gmp_neon_threads COMMAND test_gmp neon 40 4)
+add_test(NAME gmp_sme_backend COMMAND test_gmp sme 40)
+add_test(NAME gmp_sme_threads COMMAND test_gmp sme 30 3)
 
 add_executable(sweep_err tools/sweep_err.c)
 target_link_libraries(sweep_err ahnum)

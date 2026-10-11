@@ -54,7 +54,73 @@ static void bench_stage(const char *name, stage_fn f, t4_fn f4, int p, size_t nl
     free(tw);
 }
 
+// SME radix-8 vs NEON radix-8 on layout b: R elements x 8 lanes, all stages of
+// size R handled as one stage with s = R/8 (worst case: one item per j).
+static void bench_sme(size_t R, size_t s) {
+    size_t es = 128, nb = R / (8 * s), bs = 8 * s * es;
+    double *d = amalloc(R * es + 4096), *m = amalloc(s * 1024 + 128), *tw = amalloc(s * 7 * 16 + 64);
+    for (size_t i = 0; i < R * es / 8; i++) d[i] = 1e-3 * (double)(i % 97);
+    for (size_t i = 0; i < s * 128; i++) m[i] = 0.1;
+    for (size_t i = 0; i < s * 14; i++) tw[i] = 0.7;
+    size_t pts = R * 8;
+    int reps = 2000;
+    double bs_sme = 1e30, bs_neon = 1e30;
+    for (int r = 0; r < 5; r++) {
+        double t0 = now();
+        for (int i = 0; i < reps; i++) ahn_sme_r8(d, es, nb, bs, s, m);
+        double t = (now() - t0) / reps;
+        if (t < bs_sme) bs_sme = t;
+        t0 = now();
+        for (int i = 0; i < reps; i++) ahn_dif_r8_b(d, es, 4, nb, bs, s, tw);
+        t = (now() - t0) / reps;
+        if (t < bs_neon) bs_neon = t;
+    }
+    printf("R=%-5zu s=%-4zu (%4zu KB)  SME %.3f cyc/pt  NEON %.3f cyc/pt  ratio %.2fx\n", R, s,
+           R * es / 1024, bs_sme * ghz * 1e9 / pts, bs_neon * ghz * 1e9 / pts, bs_neon / bs_sme);
+    free(d);
+    free(m);
+    free(tw);
+}
+
+// SME stage alternating with a NEON pass over the same data (the real pass-1
+// pattern) vs NEON only.
+static void bench_handoff(size_t R) {
+    size_t es = 128, s = 1, nb = R / 8, bs = 8 * es;
+    double *d = amalloc(2 * R * es + 4096), *m = amalloc(1024 + 128), *tw = amalloc(1024);
+    for (size_t i = 0; i < 2 * R * es / 8; i++) d[i] = 1e-3 * (double)(i % 97);
+    for (size_t i = 0; i < 128; i++) m[i] = 0.1;
+    int reps = 4000;
+    double t0 = now();
+    for (int i = 0; i < reps; i++) ahn_sme_r8(d, es, nb, bs, s, m);
+    double t_sme = (now() - t0) / reps;
+    t0 = now();
+    for (int i = 0; i < reps; i++) ahn_cmul_b(d, es, R, (ptrdiff_t)(R * es));
+    double t_neon = (now() - t0) / reps;
+    t0 = now();
+    for (int i = 0; i < reps; i++) {
+        ahn_sme_r8(d, es, nb, bs, s, m);
+        ahn_cmul_b(d, es, R, (ptrdiff_t)(R * es));
+    }
+    double t_both = (now() - t0) / reps;
+    printf("R=%-5zu (%4zu KB) SME %.0f ns  NEON pass %.0f ns  alternating %.0f ns (sum %.0f)\n", R,
+           R * es / 1024, t_sme * 1e9, t_neon * 1e9, t_both * 1e9, (t_sme + t_neon) * 1e9);
+    free(d);
+    free(m);
+    free(tw);
+}
+
 int main(int argc, char **argv) {
+    if (argc > 2 && !strcmp(argv[2], "handoff")) {
+        for (size_t R = 64; R <= 4096; R *= 4) bench_handoff(R);
+        return 0;
+    }
+    if (argc > 2) {
+        for (size_t R = 64; R <= 8192; R *= 2) {
+            bench_sme(R, R / 8);
+            bench_sme(R, 1);
+        }
+        return 0;
+    }
     if (argc > 1) ghz = atof(argv[1]);
     // FP instruction counts per butterfly (2 lanes): DFT + twiddles
     bench_stage("dif_r8", ahn_dif_r8, NULL, 8, 1, 8, 56 + 28);

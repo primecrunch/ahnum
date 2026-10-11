@@ -162,3 +162,80 @@ Gerbicz checking.
 
 Benchmark caveat: this machine also runs a distributed compute project, so the throughput
 numbers so far come from a loaded system.
+
+## 12:40 — Quiet-machine baselines
+
+The distributed compute project was paused, giving these baselines:
+
+| Test | Configuration | Time per squaring | Throughput / time per test |
+|---|---|---|---|
+| 9357·2^369717−1 | 1 core | 69 µs | 26 s per test |
+| 9357·2^369717−1 | 10 tests × 1 thread | 86 µs each | 1125 tests/hour |
+| 9357·2^369717−1 | 14 tests × 1 thread (P- and E-cores) | 110 µs each | 1244 tests/hour |
+| 69·2^24612729−1 | 1 thread | 6.5 ms | 45 hours |
+| 69·2^24612729−1 | 10 threads | 0.77 ms | 5.3 hours |
+
+The loaded figures earlier (10.3 ms on 1 thread, 1.28 ms on 8 threads) were about 40% worse.
+
+At n ≈ 370K, splitting one test across threads always loses: 5 tests × 2 threads gives 892
+tests/hour and 1 test × 10 threads gives 510. One test per core is the right setting there.
+
+## 12:50 — Layout change for SME
+
+Numbers moved from 2-column lane-groups to 8-column blocks of 128 bytes, [re c0..c7][im c0..c7].
+For the NEON kernels this only changes load/store offsets. The generator now emits stage kernels
+for both layouts: blocks for pass 1, pairs for the pass-2 scratch. Squaring speed did not change
+(70 µs at 28672). Now 72 stage-kernel variants are tested.
+
+## 13:00 — SME radix-8 stage kernel
+
+`ahn_sme_r8` replaces each radix-8 batch (8 points × 8 lanes) with Y = M_j X, where M_j is a
+complex 8×8 matrix with the twiddles folded in. The DIT direction uses
+M = conj(F8)·diag(conj w), so one kernel and two sets of tables cover both directions.
+
+Probe results that shaped the kernel:
+
+| Operation | Cost |
+|---|---|
+| FMOPA FP64 | latency 4.6 cycles, throughput 1 per 1.15 cycles (needs 4 tiles in flight) |
+| smstart + smstop | about 9 ns |
+| `st1d` of a ZA tile slice | 7.7 cycles |
+| MOVA of 4 rows to Z registers, then normal stores | about 1.2 cycles per 64-byte vector |
+| `ld1d` | 0.3–0.7 cycles per vector |
+
+Along the way:
+- `smstart` and `smstop` zero every FP register, including the callee-saved d8–d15. A timing
+  probe that did not save them produced nonsense clock readings.
+- Benchmarking stores into the same 2 KB repeatedly made them look 2× slower than streaming
+  stores do.
+- I first counted the FMOPA cost wrong: a pair of items needs 64, not 32. With that corrected,
+  the kernel is FMOPA-bound at 0.85 cycles/point against 1.3 for NEON. The floor for this
+  formulation is 0.58.
+
+## 13:20 — SME in the squaring loop: slower
+
+Pass-1 radix-8 column stages were wired to SME, with the four-step twiddle applied by a small
+NEON kernel. The results were correct and slower:
+
+| FFT length | NEON | SME |
+|---|---|---|
+| 24576 | 64 µs | 83 µs |
+| 28672 | 70 µs | 100 µs |
+| 262144 | 720 µs | 903 µs |
+
+A hand-off microbenchmark explains it. Alternating an SME stage and a NEON pass over the same
+8 KB costs 577 ns, against 180 ns for the two run separately. The SME unit sits at L2, so each
+change of owner moves the group's cache lines out of the core's L1 and back, at about 28 cycles
+per line. Normalisation has to run on NEON, because streaming-SVE arithmetic is about 5× slower,
+so each group changes hands at least twice per squaring.
+
+Throughput cannot gain either: an SME test is slower than a NEON test on the same core, and the
+unit is shared by 5 cores.
+
+Decision: keep `--backend sme` as a documented, tested opt-in. NEON stays the default.
+
+The full 9357·2^369717−1 run:
+- NEON: 26.7 s
+- SME: 35.6 s
+
+Both give RES64 F5FDA01218F20439.

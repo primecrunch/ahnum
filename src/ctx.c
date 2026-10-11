@@ -209,6 +209,9 @@ ahn_ctx *ahn_ctx_new(uint64_t k, uint64_t n, int32_t c, const ahn_opts *o) {
     case AHN_BACKEND_NEON:
         ctx->ops = &ahn_neon_ops;
         break;
+    case AHN_BACKEND_SME:
+        ctx->ops = &ahn_sme_ops;
+        break;
     case AHN_BACKEND_C2P:
         ctx->ops = &ahn_f2_ops;
         break;

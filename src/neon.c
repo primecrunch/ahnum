@@ -3,8 +3,8 @@
 //
 // Memory layout of a number: H = R*C complex elements, row-major, row stride
 // `rowstride` bytes (C*16 plus padding against cache-set conflicts). Within a
-// row, columns c and c+1 share a 32-byte lane-group [re c, re c+1, im c, im c+1].
-// Pass 1 works on groups of 8 columns (128 bytes per row, 4 lane-groups).
+// row, columns are stored in 8-column blocks of 128 bytes [re c0..c7][im c0..c7]
+// ("layout b"); pass 1 works on one block per row (a group of 8 columns).
 // Pass 2 transposes a row pair (p, p') into a scratch buffer whose element q is
 // [re_p(q), re_p'(q), im_p(q), im_p'(q)], so every row-FFT butterfly is
 // lane-uniform and the real-split partner of lane 0 at q is lane 1 at C-1-q.
@@ -17,6 +17,7 @@
 #include "threads.h"
 
 #include <math.h>
+#include <sys/sysctl.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -29,9 +30,13 @@ typedef struct {
     uint8_t p;
     uint32_t s, nblocks;
     const double *tw;  // s*(p-1) packed complex
-    stage_fn tw_f, notw_f;
-    t4_fn dif_t4, dit_t4;
-    stage_fn dit_tw, dit_notw;
+    // [0]: layout a (pass-2 pair scratch), [1]: layout b (8-column blocks)
+    stage_fn tw_f[2], notw_f[2];
+    t4_fn dif_t4[2], dit_t4[2];
+    stage_fn dit_tw[2], dit_notw[2];
+    // radix-8 only: complex 8x8 matrices per j for the SME kernel (1 KB each),
+    // DIF: diag(w_j) F8, DIT: conj(F8) diag(conj w_j)
+    double *mdif, *mdit;
 } stage;
 
 typedef struct {
@@ -46,6 +51,7 @@ typedef struct {
     size_t rowstride;  // bytes
     nplan pr, pc;
     double *t4;        // four-step twiddles, same layout as data
+    int sme;           // radix-8 column stages on the SME unit
     double *A, *IA;    // [g*R + r]
     uint64_t *mask;    // [g*R + r]
     double B[16], IB[16], IBs[16];
@@ -92,12 +98,18 @@ static int factorize(uint32_t n, uint8_t *radix) {
 static void set_fns(stage *s) {
 #define CASE(P)                          \
     case P:                              \
-        s->tw_f = ahn_dif_r##P;          \
-        s->notw_f = ahn_dif_r##P##_notw; \
-        s->dif_t4 = ahn_dif_r##P##_t4;   \
-        s->dit_t4 = ahn_dit_r##P##_t4;   \
-        s->dit_tw = ahn_dit_r##P;        \
-        s->dit_notw = ahn_dit_r##P##_notw; \
+        s->tw_f[0] = ahn_dif_r##P;                \
+        s->notw_f[0] = ahn_dif_r##P##_notw;       \
+        s->dif_t4[0] = ahn_dif_r##P##_t4;         \
+        s->dit_t4[0] = ahn_dit_r##P##_t4;         \
+        s->dit_tw[0] = ahn_dit_r##P;              \
+        s->dit_notw[0] = ahn_dit_r##P##_notw;     \
+        s->tw_f[1] = ahn_dif_r##P##_b;            \
+        s->notw_f[1] = ahn_dif_r##P##_notw_b;     \
+        s->dif_t4[1] = ahn_dif_r##P##_t4_b;       \
+        s->dit_t4[1] = ahn_dit_r##P##_t4_b;       \
+        s->dit_tw[1] = ahn_dit_r##P##_b;          \
+        s->dit_notw[1] = ahn_dit_r##P##_notw_b;   \
         break;
     switch (s->p) {
         CASE(2)
@@ -142,6 +154,31 @@ static int nplan_init(nplan *pl, uint32_t n) {
                 *tp++ = -__sinpi(a);
             }
         }
+        if (st->p == 8) {
+            st->mdif = ahn_alloc((size_t)st->s * 128 * sizeof(double));
+            st->mdit = ahn_alloc((size_t)st->s * 128 * sizeof(double));
+            for (uint32_t j = 0; j < st->s; j++) {
+                for (uint32_t u = 0; u < 8; u++) {
+                    for (uint32_t t = 0; t < 8; t++) {
+                        // f = w8^{tu}, w = w_sz^{t j} (DIF) or w_sz^{u j} (DIT)
+                        double af = 2.0 * ((t * u) % 8) / 8;
+                        double fr = __cospi(af), fi = -__sinpi(af);
+                        double aw = 2.0 * (double)((uint64_t)t * j % sz) / sz;
+                        double wr = __cospi(aw), wi = -__sinpi(aw);
+                        double *m = st->mdif + j * 128 + u * 16;
+                        m[t] = fr * wr - fi * wi;
+                        m[8 + t] = fr * wi + fi * wr;
+                        aw = 2.0 * (double)((uint64_t)u * j % sz) / sz;
+                        wr = __cospi(aw);
+                        wi = -__sinpi(aw);
+                        // conj(f) * conj(w)
+                        m = st->mdit + j * 128 + u * 16;
+                        m[t] = fr * wr - fi * wi;
+                        m[8 + t] = -(fr * wi + fi * wr);
+                    }
+                }
+            }
+        }
         sz = st->s;
     }
     for (uint32_t k = 0; k < n; k++) {
@@ -159,6 +196,10 @@ static int nplan_init(nplan *pl, uint32_t n) {
 }
 
 static void nplan_free(nplan *pl) {
+    for (uint32_t i = 0; i < pl->nst; i++) {
+        ahn_free_aligned(pl->st[i].mdif);
+        ahn_free_aligned(pl->st[i].mdit);
+    }
     ahn_free_aligned(pl->twmem);
     free(pl->rev);
     free(pl->pos);
@@ -166,38 +207,40 @@ static void nplan_free(nplan *pl) {
 
 // Forward DIF over n elements at base (element stride es, nlg lane-groups);
 // the last stage uses the four-step twiddle table if delta_ok.
-static void plan_fwd(const nplan *pl, double *base, size_t es, size_t nlg, int t4,
+static void plan_fwd(const nplan *pl, int lay, double *base, size_t es, size_t nlg, int t4,
                      ptrdiff_t delta) {
     for (uint32_t i = 0; i < pl->nst; i++) {
         const stage *st = &pl->st[i];
         size_t bs = (size_t)st->s * st->p * es;
         if (st->s == 1) {
-            if (t4) st->dif_t4(base, es, nlg, st->nblocks, bs, delta);
-            else st->notw_f(base, es, nlg, st->nblocks, bs, 1, NULL);
+            if (t4) st->dif_t4[lay](base, es, nlg, st->nblocks, bs, delta);
+            else st->notw_f[lay](base, es, nlg, st->nblocks, bs, 1, NULL);
         } else {
-            st->tw_f(base, es, nlg, st->nblocks, bs, st->s, st->tw);
+            st->tw_f[lay](base, es, nlg, st->nblocks, bs, st->s, st->tw);
         }
     }
 }
 
-static void plan_inv(const nplan *pl, double *base, size_t es, size_t nlg, int t4,
+static void plan_inv(const nplan *pl, int lay, double *base, size_t es, size_t nlg, int t4,
                      ptrdiff_t delta) {
     for (uint32_t i = pl->nst; i-- > 0;) {
         const stage *st = &pl->st[i];
         size_t bs = (size_t)st->s * st->p * es;
         if (st->s == 1) {
-            if (t4) st->dit_t4(base, es, nlg, st->nblocks, bs, delta);
-            else st->dit_notw(base, es, nlg, st->nblocks, bs, 1, NULL);
+            if (t4) st->dit_t4[lay](base, es, nlg, st->nblocks, bs, delta);
+            else st->dit_notw[lay](base, es, nlg, st->nblocks, bs, 1, NULL);
         } else {
-            st->dit_tw(base, es, nlg, st->nblocks, bs, st->s, st->tw);
+            st->dit_tw[lay](base, es, nlg, st->nblocks, bs, st->s, st->tw);
         }
     }
 }
 
 // ---- layout -------------------------------------------------------------
 
+// Real part of element (r, c); the imaginary part is IM doubles further on.
+#define IM 8
 static inline double *elem(const neon_state *st, double *d, uint32_t r, uint32_t c) {
-    return (double *)((char *)d + r * st->rowstride + (c >> 1) * 32) + (c & 1);
+    return (double *)((char *)d + r * st->rowstride + (c >> 3) * 128) + (c & 7);
 }
 
 static int choose_shape(uint32_t H, uint32_t *R, uint32_t *C) {
@@ -240,11 +283,27 @@ static double weight_at(const ahn_ctx *ctx, uint64_t j, uint64_t sj) {
     return exp2(e);
 }
 
-static int neon_init(ahn_ctx *ctx) {
+static int neon_init_impl(ahn_ctx *ctx, int sme);
+static int neon_init(ahn_ctx *ctx) { return neon_init_impl(ctx, 0); }
+
+static int sme_available(void) {
+    int v = 0;
+    size_t len = sizeof v;
+    if (sysctlbyname("hw.optional.arm.FEAT_SME_F64F64", &v, &len, NULL, 0)) return 0;
+    return v;
+}
+
+static int sme_init(ahn_ctx *ctx) {
+    if (!sme_available()) return -1;
+    return neon_init_impl(ctx, 1);
+}
+
+static int neon_init_impl(ahn_ctx *ctx, int sme) {
     if (ctx->L % 64) return -1;
     neon_state *st = calloc(1, sizeof *st);
     if (!st) return -1;
     ctx->bk = st;
+    st->sme = sme;
     st->H = ctx->L / 2;
     if (choose_shape(st->H, &st->R, &st->C)) return -1;
     uint32_t R = st->R, C = st->C, H = st->H;
@@ -265,7 +324,7 @@ static int neon_init(ahn_ctx *ctx) {
             double a = 2.0 * (double)((uint64_t)c * kr % H) / H;
             double *e = elem(st, st->t4, p, c);
             e[0] = __cospi(a);
-            e[2] = -__sinpi(a);
+            e[IM] = -__sinpi(a);
         }
     }
 
@@ -429,17 +488,55 @@ static inline dinfo digit_info(const neon_state *st, uint32_t g, uint32_t r, uin
 
 // digit i of row r in group g lives at column g*8 + i/2, re (i even) / im
 static inline double *dptr(const neon_state *st, double *d, uint32_t g, uint32_t r, uint32_t i) {
-    return elem(st, d, r, g * G + i / 2) + ((i & 1) ? 2 : 0);
+    return elem(st, d, r, g * G + i / 2) + ((i & 1) ? IM : 0);
+}
+
+static inline int sme_stage(const neon_state *st, const stage *s) {
+    return st->sme && s->p == 8 && ((size_t)s->s * s->nblocks) % 2 == 0;
 }
 
 static void group_fwd(neon_state *st, double *d, uint32_t g) {
     double *base = (double *)((char *)d + g * 128);
-    plan_fwd(&st->pr, base, st->rowstride, 4, 1, (char *)st->t4 - (char *)d);
+    ptrdiff_t delta = (char *)st->t4 - (char *)d;
+    if (!st->sme) {
+        plan_fwd(&st->pr, 1, base, st->rowstride, 4, 1, delta);
+        return;
+    }
+    size_t es = st->rowstride;
+    for (uint32_t i = 0; i < st->pr.nst; i++) {
+        const stage *s = &st->pr.st[i];
+        size_t bs = (size_t)s->s * s->p * es;
+        if (sme_stage(st, s)) {
+            ahn_sme_r8(base, es, s->nblocks, bs, s->s, s->mdif);
+            if (s->s == 1) ahn_cmul_b(base, es, st->R, delta);
+        } else if (s->s == 1) {
+            s->dif_t4[1](base, es, 4, s->nblocks, bs, delta);
+        } else {
+            s->tw_f[1](base, es, 4, s->nblocks, bs, s->s, s->tw);
+        }
+    }
 }
 
 static void group_inv(neon_state *st, double *d, uint32_t g) {
     double *base = (double *)((char *)d + g * 128);
-    plan_inv(&st->pr, base, st->rowstride, 4, 1, (char *)st->t4 - (char *)d);
+    ptrdiff_t delta = (char *)st->t4 - (char *)d;
+    if (!st->sme) {
+        plan_inv(&st->pr, 1, base, st->rowstride, 4, 1, delta);
+        return;
+    }
+    size_t es = st->rowstride;
+    for (uint32_t i = st->pr.nst; i-- > 0;) {
+        const stage *s = &st->pr.st[i];
+        size_t bs = (size_t)s->s * s->p * es;
+        if (sme_stage(st, s)) {
+            if (s->s == 1) ahn_cmulc_b(base, es, st->R, delta);
+            ahn_sme_r8(base, es, s->nblocks, bs, s->s, s->mdit);
+        } else if (s->s == 1) {
+            s->dit_t4[1](base, es, 4, s->nblocks, bs, delta);
+        } else {
+            s->dit_tw[1](base, es, 4, s->nblocks, bs, s->s, s->tw);
+        }
+    }
 }
 
 // ---- pass 1 -----------------------------------------------------------------
@@ -741,7 +838,7 @@ static void pass2_job(void *arg, int t, int n) {
         double *rp = (double *)((char *)d + p * st->rowstride);
         double *rpp = (double *)((char *)d + pp * st->rowstride);
         ahn_rows_in(rp, rpp, s, C);
-        plan_fwd(&st->pc, s, 32, 1, 0, 0);
+        plan_fwd(&st->pc, 0, s, 32, 1, 0, 0);
         const double *y = st->mul ? st->yscr + (size_t)i * 4 * C : NULL;
         if (i == 0) {
             split_special_c(st, s, y, p, pp);
@@ -751,7 +848,7 @@ static void pass2_job(void *arg, int t, int n) {
         } else {
             split_pair_c(st, s, y, p, pp);
         }
-        plan_inv(&st->pc, s, 32, 1, 0, 0);
+        plan_inv(&st->pc, 0, s, 32, 1, 0, 0);
         ahn_rows_out(rp, rpp, s, C);
     }
 }
@@ -766,7 +863,7 @@ static void prep_job(void *arg, int t, int n) {
         double *s = st->yscr + (size_t)i * 4 * C;
         ahn_rows_in((double *)((char *)st->d + p * st->rowstride),
                     (double *)((char *)st->d + pp * st->rowstride), s, C);
-        plan_fwd(&st->pc, s, 32, 1, 0, 0);
+        plan_fwd(&st->pc, 0, s, 32, 1, 0, 0);
     }
 }
 
@@ -840,6 +937,17 @@ static void neon_mul_small(ahn_ctx *ctx, ahn_num *x, int64_t m) {
 const ahn_backend_ops ahn_neon_ops = {
     .name = "neon",
     .init = neon_init,
+    .free = neon_free,
+    .to_digits = neon_to_digits,
+    .from_digits = neon_from_digits,
+    .square = neon_square,
+    .mul = neon_mul,
+    .mul_small = neon_mul_small,
+};
+
+const ahn_backend_ops ahn_sme_ops = {
+    .name = "sme",
+    .init = sme_init,
     .free = neon_free,
     .to_digits = neon_to_digits,
     .from_digits = neon_from_digits,

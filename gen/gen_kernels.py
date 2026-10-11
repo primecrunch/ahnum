@@ -285,9 +285,35 @@ def const_table(g, name, vals):
     g.consts.append((name, vals))
 
 
-def gen_stage(g, p, direction, mode):
-    """direction 'dif' or 'dit'; mode 'tw', 'notw' or 't4'."""
-    name = "%s%s_r%d%s" % (PREFIX, direction, p, "" if mode == "tw" else "_" + mode)
+# Complex element layouts. 'a': lane-group of 32 bytes [re l0 l1][im l0 l1],
+# lane-groups consecutive. 'b': 8-lane blocks of 128 bytes [re l0..l7][im l0..l7],
+# lane-group g = lanes 2g, 2g+1 with re at 16g and im at 64 + 16g.
+LAYOUT = {"a": (16, 32), "b": (64, 16)}  # (im offset, lane-group step)
+
+
+def ldc(g, c, addr, layout):
+    imoff = LAYOUT[layout][0]
+    if imoff == 16:
+        g.emit("ldp %s, %s, [%s]" % (q(c[0]), q(c[1]), addr))
+    else:
+        g.emit("ldr %s, [%s]" % (q(c[0]), addr))
+        g.emit("ldr %s, [%s, #%d]" % (q(c[1]), addr, imoff))
+
+
+def stc(g, c, addr, layout):
+    imoff = LAYOUT[layout][0]
+    if imoff == 16:
+        g.emit("stp %s, %s, [%s]" % (q(c[0]), q(c[1]), addr))
+    else:
+        g.emit("str %s, [%s]" % (q(c[0]), addr))
+        g.emit("str %s, [%s, #%d]" % (q(c[1]), addr, imoff))
+
+
+def gen_stage(g, p, direction, mode, layout="a"):
+    """direction 'dif' or 'dit'; mode 'tw', 'notw' or 't4'; layout 'a' or 'b'
+    (layout 'b' kernels carry the suffix _b)."""
+    name = "%s%s_r%d%s%s" % (PREFIX, direction, p, "" if mode == "tw" else "_" + mode,
+                             "" if layout == "a" else "_b")
     sign = -1 if direction == "dif" else 1
     g.out.append("")
     g.out.append(".globl %s" % name)
@@ -308,7 +334,7 @@ def gen_stage(g, p, direction, mode):
     cname = None
     if p == 8:
         nconst = 1
-        cname = "Lc8_%s_%s" % (direction, mode)
+        cname = "Lc8_%s_%s_%s" % (direction, mode, layout)
         c = math.sqrt(0.5)
         const_table(g, cname, [c, -c])
     elif p in (3, 5, 7):
@@ -318,7 +344,7 @@ def gen_stage(g, p, direction, mode):
         if len(vals) % 2:
             vals.append(0.0)
         nconst = len(vals) // 2
-        cname = "Lcp%d_%s_%s" % (p, direction, mode)
+        cname = "Lcp%d_%s_%s_%s" % (p, direction, mode, layout)
         const_table(g, cname, vals)
     # register budget: twiddles at the top, constants below them
     ntw = p - 1 if mode == "tw" else 0
@@ -351,13 +377,13 @@ def gen_stage(g, p, direction, mode):
     for t in range(p):
         c = R.cx()
         g.emit("add x14, x12, %s" % offregs[t])
-        g.emit("ldp %s, %s, [x14]" % (q(c[0]), q(c[1])))
+        ldc(g, c, "x14", layout)
         if direction == "dit" and t > 0 and mode == "tw":
             c = cmul_tw(f, c, twregs[t - 1], conj=True)
         if direction == "dit" and mode == "t4":
             w = R.cx()
             g.emit("add x15, x14, x6")
-            g.emit("ldp %s, %s, [x15]" % (q(w[0]), q(w[1])))
+            ldc(g, w, "x15", layout)
             c = cmul_vec(f, c, w, conj=True)
         x.append(c)
 
@@ -368,9 +394,9 @@ def gen_stage(g, p, direction, mode):
         if direction == "dif" and mode == "t4":
             w = R.cx()
             g.emit("add x15, x14, x6")
-            g.emit("ldp %s, %s, [x15]" % (q(w[0]), q(w[1])))
+            ldc(g, w, "x15", layout)
             y = cmul_vec(f, y, w, conj=False)
-        g.emit("stp %s, %s, [x14]" % (q(y[0]), q(y[1])))
+        stc(g, y, "x14", layout)
         R.putcx(y)
 
     if p == 2:
@@ -386,7 +412,7 @@ def gen_stage(g, p, direction, mode):
         for t in range(p):
             store(t, ys[t])
 
-    g.emit("add x12, x12, #32")
+    g.emit("add x12, x12, #%d" % LAYOUT[layout][1])
     g.emit("subs x13, x13, #1")
     g.emit("b.ne 3b")
     g.emit("add x9, x9, x1")
@@ -405,7 +431,8 @@ def gen_norm(g, mode, table, err):
     double ahn_norm_{a,b,c}[t][e](double *gbase, size_t rowstride, size_t npairs,
                                   double *carry, const double *A, const double *IA,
                                   const uint64_t *mask, const double *consts)
-    gbase points at the first row of the group (8 columns, 128 bytes/row).
+    gbase points at the first row of the group: one 8-column block (layout b,
+    [re c0..c7][im c0..c7]) per row.
     Row pair (r, r+1) is processed with lanes = rows. Per digit i < 16:
       a: x = rint(d * osc) + carry; carry = rint(x / base); x -= carry*base;
          d = x * w
@@ -443,8 +470,10 @@ def gen_norm(g, mode, table, err):
         if not table:
             E("ldp q20, q21, [x7, #%d]" % (32 * lg))        # B[4lg .. 4lg+3]
             E("ldp q22, q23, [x7, #%d]" % (128 + 32 * lg))  # IBs
-        E("ldp q0, q1, [x0, #%d]" % (32 * lg))  # row r: re, im
-        E("ldp q2, q3, [x9, #%d]" % (32 * lg))  # row r+1
+        E("ldr q0, [x0, #%d]" % (16 * lg))       # row r: re (layout b)
+        E("ldr q1, [x0, #%d]" % (64 + 16 * lg))  #        im
+        E("ldr q2, [x9, #%d]" % (16 * lg))       # row r+1
+        E("ldr q3, [x9, #%d]" % (64 + 16 * lg))
         E("trn1 v4.2d, v0.2d, v2.2d")  # digit 4lg+0
         E("trn1 v5.2d, v1.2d, v3.2d")  # digit 4lg+1
         E("trn2 v6.2d, v0.2d, v2.2d")  # digit 4lg+2
@@ -494,8 +523,10 @@ def gen_norm(g, mode, table, err):
         E("trn1 v1.2d, v5.2d, v7.2d")
         E("trn2 v2.2d, v4.2d, v6.2d")
         E("trn2 v3.2d, v5.2d, v7.2d")
-        E("stp q0, q1, [x0, #%d]" % (32 * lg))
-        E("stp q2, q3, [x9, #%d]" % (32 * lg))
+        E("str q0, [x0, #%d]" % (16 * lg))
+        E("str q1, [x0, #%d]" % (64 + 16 * lg))
+        E("str q2, [x9, #%d]" % (16 * lg))
+        E("str q3, [x9, #%d]" % (64 + 16 * lg))
     if mode == "c":
         E("movi v24.2d, #0")
     E("str q24, [x3], #16")
@@ -538,8 +569,10 @@ def gen_norm_quad(g, mode, err):
     for lg in range(4):
         for P in pairs:
             a, b, c, d = P["ld"]
-            E("ldp q%d, q%d, [%s, #%d]" % (a, b, P["rows"][0], 32 * lg))
-            E("ldp q%d, q%d, [%s, #%d]" % (c, d, P["rows"][1], 32 * lg))
+            E("ldr q%d, [%s, #%d]" % (a, P["rows"][0], 16 * lg))
+            E("ldr q%d, [%s, #%d]" % (b, P["rows"][0], 64 + 16 * lg))
+            E("ldr q%d, [%s, #%d]" % (c, P["rows"][1], 16 * lg))
+            E("ldr q%d, [%s, #%d]" % (d, P["rows"][1], 64 + 16 * lg))
             D = P["dig"]
             E("trn1 v%d.2d, v%d.2d, v%d.2d" % (D[0], a, c))
             E("trn1 v%d.2d, v%d.2d, v%d.2d" % (D[1], b, d))
@@ -582,8 +615,10 @@ def gen_norm_quad(g, mode, err):
             E("trn1 v%d.2d, v%d.2d, v%d.2d" % (b, D[1], D[3]))
             E("trn2 v%d.2d, v%d.2d, v%d.2d" % (c, D[0], D[2]))
             E("trn2 v%d.2d, v%d.2d, v%d.2d" % (d, D[1], D[3]))
-            E("stp q%d, q%d, [%s, #%d]" % (a, b, P["rows"][0], 32 * lg))
-            E("stp q%d, q%d, [%s, #%d]" % (c, d, P["rows"][1], 32 * lg))
+            E("str q%d, [%s, #%d]" % (a, P["rows"][0], 16 * lg))
+            E("str q%d, [%s, #%d]" % (b, P["rows"][0], 64 + 16 * lg))
+            E("str q%d, [%s, #%d]" % (c, P["rows"][1], 16 * lg))
+            E("str q%d, [%s, #%d]" % (d, P["rows"][1], 64 + 16 * lg))
     E("stp q24, q25, [x3], #32")
     E("add x4, x4, #1024")
     E("add x12, x12, #1024")
@@ -599,24 +634,31 @@ def gen_norm_quad(g, mode, err):
 def gen_rows(g):
     """void ahn_rows_in(const double *rp, const double *rpp, double *scr, size_t C)
        void ahn_rows_out(double *rp, double *rpp, const double *scr, size_t C)
-    Transpose between two rows (lane-groups [re c,c+1][im c,c+1]) and the
-    scratch format (element q = [re_p, re_pp][im_p, im_pp])."""
+    Transpose between two rows in layout b (8-column blocks [re c0..c7][im c0..c7])
+    and the pass-2 scratch in layout a (element q = [re_p, re_pp][im_p, im_pp]).
+    C must be a multiple of 8."""
     E = g.emit
     g.out.append("")
     g.out.append(".globl %srows_in" % PREFIX)
     g.out.append(".p2align 5")
     g.label(PREFIX + "rows_in")
-    E("lsr x3, x3, #2")
+    E("lsr x3, x3, #3")
     g.label("1")
-    for h in range(2):
-        E("ldp q0, q1, [x0], #32")
-        E("ldp q2, q3, [x1], #32")
-        E("trn1 v4.2d, v0.2d, v2.2d")
-        E("trn1 v5.2d, v1.2d, v3.2d")
-        E("trn2 v6.2d, v0.2d, v2.2d")
-        E("trn2 v7.2d, v1.2d, v3.2d")
-        E("stp q4, q5, [x2], #32")
-        E("stp q6, q7, [x2], #32")
+    for h in range(2):  # half-block: column pairs 2h, 2h+1
+        E("ldp q0, q1, [x0, #%d]" % (32 * h))       # re p: cols 4h..4h+3
+        E("ldp q2, q3, [x0, #%d]" % (64 + 32 * h))  # im p
+        E("ldp q4, q5, [x1, #%d]" % (32 * h))       # re pp
+        E("ldp q6, q7, [x1, #%d]" % (64 + 32 * h))  # im pp
+        for m in range(2):
+            re_p, im_p, re_q, im_q = m, 2 + m, 4 + m, 6 + m
+            E("trn1 v16.2d, v%d.2d, v%d.2d" % (re_p, re_q))
+            E("trn1 v17.2d, v%d.2d, v%d.2d" % (im_p, im_q))
+            E("trn2 v18.2d, v%d.2d, v%d.2d" % (re_p, re_q))
+            E("trn2 v19.2d, v%d.2d, v%d.2d" % (im_p, im_q))
+            E("stp q16, q17, [x2], #32")
+            E("stp q18, q19, [x2], #32")
+    E("add x0, x0, #128")
+    E("add x1, x1, #128")
     E("subs x3, x3, #1")
     E("b.ne 1b")
     E("ret")
@@ -624,17 +666,22 @@ def gen_rows(g):
     g.out.append(".globl %srows_out" % PREFIX)
     g.out.append(".p2align 5")
     g.label(PREFIX + "rows_out")
-    E("lsr x3, x3, #2")
+    E("lsr x3, x3, #3")
     g.label("1")
     for h in range(2):
-        E("ldp q4, q5, [x2], #32")
-        E("ldp q6, q7, [x2], #32")
-        E("trn1 v0.2d, v4.2d, v6.2d")
-        E("trn1 v1.2d, v5.2d, v7.2d")
-        E("trn2 v2.2d, v4.2d, v6.2d")
-        E("trn2 v3.2d, v5.2d, v7.2d")
-        E("stp q0, q1, [x0], #32")
-        E("stp q2, q3, [x1], #32")
+        for m in range(2):
+            E("ldp q16, q17, [x2], #32")
+            E("ldp q18, q19, [x2], #32")
+            E("trn1 v%d.2d, v16.2d, v18.2d" % m)        # re p
+            E("trn1 v%d.2d, v17.2d, v19.2d" % (2 + m))  # im p
+            E("trn2 v%d.2d, v16.2d, v18.2d" % (4 + m))  # re pp
+            E("trn2 v%d.2d, v17.2d, v19.2d" % (6 + m))  # im pp
+        E("stp q0, q1, [x0, #%d]" % (32 * h))
+        E("stp q2, q3, [x0, #%d]" % (64 + 32 * h))
+        E("stp q4, q5, [x1, #%d]" % (32 * h))
+        E("stp q6, q7, [x1, #%d]" % (64 + 32 * h))
+    E("add x0, x0, #128")
+    E("add x1, x1, #128")
     E("subs x3, x3, #1")
     E("b.ne 1b")
     E("ret")
@@ -704,8 +751,166 @@ def gen_split_sq(g):
     E("ret")
 
 
-def write(outdir, fname, g):
-    lines = [".text"] + g.out
+def gen_cmul_b(g, conj):
+    """void ahn_cmul{c}_b(double *base, size_t estride, size_t n, ptrdiff_t delta)
+    Multiply n layout-b elements (8 lanes) at base + i*estride by the complex
+    values at the same address + delta (conjugated for the 'c' variant)."""
+    E = g.emit
+    name = "%scmul%s_b" % (PREFIX, "c" if conj else "")
+    g.out.append("")
+    g.out.append(".globl %s" % name)
+    g.out.append(".p2align 5")
+    g.label(name)
+    g.label("1")
+    E("add x9, x0, x3")
+    for lg in range(4):
+        E("ldr q0, [x0, #%d]" % (16 * lg))
+        E("ldr q1, [x0, #%d]" % (64 + 16 * lg))
+        E("ldr q2, [x9, #%d]" % (16 * lg))
+        E("ldr q3, [x9, #%d]" % (64 + 16 * lg))
+        E("fmul v4.2d, v0.2d, v2.2d")
+        E("fmul v5.2d, v1.2d, v2.2d")
+        if not conj:
+            E("fmls v4.2d, v1.2d, v3.2d")
+            E("fmla v5.2d, v0.2d, v3.2d")
+        else:
+            E("fmla v4.2d, v1.2d, v3.2d")
+            E("fmls v5.2d, v0.2d, v3.2d")
+        E("str q4, [x0, #%d]" % (16 * lg))
+        E("str q5, [x0, #%d]" % (64 + 16 * lg))
+    E("add x0, x0, x1")
+    E("subs x2, x2, #1")
+    E("b.ne 1b")
+    E("ret")
+
+
+def gen_sme_r8(g):
+    """Radix-8 FFT stage on the SME unit (FP64 outer products), layout b.
+
+    void ahn_sme_r8(double *base, size_t estride, size_t nblocks, size_t bstride,
+                    size_t s, const double *mats)
+    Items are (block b, position j); item elements u < 8 are 8-lane blocks
+    (128 bytes: re[8], im[8]) at base + b*bstride + j*estride + u*s*estride.
+    Each item is replaced by Y = M_j X with M_j a complex 8x8 matrix stored as
+    16 vectors of 8 doubles: for u = 0..7, column u real parts then imaginary
+    parts (1 KB per j). Twiddles are folded into M_j, so the same kernel does
+    DIF stages (M = diag(w_j) F8) and DIT stages (M = conj(F8) diag(conj w_j)).
+    nblocks*s must be even. Two items are in flight (tiles za0-za3 or za4-za7,
+    alternating) to cover the FMOPA latency.
+    """
+    E = g.emit
+    name = PREFIX + "sme_r8"
+    g.out.append("")
+    g.out.append(".globl %s" % name)
+    g.out.append(".p2align 5")
+    g.label(name)
+    g.out.append(SAVE)
+    # args: x0 base, x1 estride, x2 nblocks, x3 bstride, x4 s, x5 mats;
+    # shift to x3 nblocks, x4 bstride, x5 s, x6 mats
+    E("mov x6, x5")
+    E("mov x5, x4")
+    E("mov x4, x3")
+    E("mov x3, x2")
+    E("smstart")
+    E("ptrue p0.d")
+    E("mul x7, x5, x1")          # S = s*estride
+    offs = ["xzr", "x7", "x19", "x20", "x21", "x22", "x23", "x24"]
+    for u in range(2, 8):
+        E("add %s, %s, x7" % (offs[u], offs[u - 1]))
+    E("mov x25, #8")             # +64 bytes in st1d [x, x25, lsl #3]
+    E("mul x26, x3, x5")         # items = nblocks * s
+    E("lsr x26, x26, #1")        # pairs
+    # item iterator: x9 = block base, x10 = j, x11 = element ptr, x12 = matrix ptr
+    E("mov x9, x0")
+    E("mov x10, #0")
+    E("mov x11, x0")
+    E("mov x12, x6")
+
+    def next_item():
+        # advance (b, j): j++, ptr += estride, mat += 1024; wrap at s
+        E("add x10, x10, #1")
+        E("add x11, x11, x1")
+        E("add x12, x12, #1024")
+        E("cmp x10, x5")
+        E("b.ne 7f")
+        E("mov x10, #0")
+        E("add x9, x9, x4")
+        E("mov x11, x9")
+        E("mov x12, x6")
+        g.label("7")
+
+    def pair(tset):
+        ta = [4 * tset + i for i in range(4)]  # A re, A im, B re, B im
+        # A = current item (x11, x12); B = next item (x13, x14)
+        E("mov x13, x11")
+        E("mov x14, x12")
+        next_item()
+        E("mov x16, x11")
+        E("mov x15, x12")
+        next_item()
+        # item A: x13 elements, x14 matrix; item B: x16 elements, x15 matrix
+        # (x14 and x15 become the tile-slice indices for the stores)
+        E("zero {za%d.d, za%d.d, za%d.d, za%d.d}" % tuple(ta))
+        for u in range(8):
+            zb = 8 * (u % 4)
+            xa, xi_a, xb, xi_b, fa, fia, fb, fib = [zb + i for i in range(8)]
+            E("add x17, x13, %s" % offs[u])
+            E("ld1d {z%d.d}, p0/z, [x17]" % xa)
+            E("ld1d {z%d.d}, p0/z, [x17, #1, mul vl]" % xi_a)
+            E("add x17, x16, %s" % offs[u])
+            E("ld1d {z%d.d}, p0/z, [x17]" % xb)
+            E("ld1d {z%d.d}, p0/z, [x17, #1, mul vl]" % xi_b)
+            E("ld1d {z%d.d}, p0/z, [x14, #%d, mul vl]" % (fa, (2 * u) % 8) if 2 * u < 8
+              else "ld1d {z%d.d}, p0/z, [x14, #%d, mul vl]" % (fa, 2 * u - 8))
+            E("ld1d {z%d.d}, p0/z, [x14, #%d, mul vl]" % (fia, (2 * u + 1) % 8) if 2 * u + 1 < 8
+              else "ld1d {z%d.d}, p0/z, [x14, #%d, mul vl]" % (fia, 2 * u + 1 - 8))
+            E("ld1d {z%d.d}, p0/z, [x15, #%d, mul vl]" % (fb, 2 * u if 2 * u < 8 else 2 * u - 8))
+            E("ld1d {z%d.d}, p0/z, [x15, #%d, mul vl]" % (fib, 2 * u + 1 if 2 * u + 1 < 8 else 2 * u + 1 - 8))
+            if u == 3:
+                # columns 4..7 of the matrix are the next 512 bytes
+                E("add x14, x14, #512")
+                E("add x15, x15, #512")
+            # each tile is touched every fourth FMOPA (latency ~4.6 cycles)
+            E("fmopa za%d.d, p0/m, p0/m, z%d.d, z%d.d" % (ta[0], fa, xa))
+            E("fmopa za%d.d, p0/m, p0/m, z%d.d, z%d.d" % (ta[2], fb, xb))
+            E("fmopa za%d.d, p0/m, p0/m, z%d.d, z%d.d" % (ta[1], fa, xi_a))
+            E("fmopa za%d.d, p0/m, p0/m, z%d.d, z%d.d" % (ta[3], fb, xi_b))
+            E("fmops za%d.d, p0/m, p0/m, z%d.d, z%d.d" % (ta[0], fia, xi_a))
+            E("fmops za%d.d, p0/m, p0/m, z%d.d, z%d.d" % (ta[2], fib, xi_b))
+            E("fmopa za%d.d, p0/m, p0/m, z%d.d, z%d.d" % (ta[1], fia, xa))
+            E("fmopa za%d.d, p0/m, p0/m, z%d.d, z%d.d" % (ta[3], fib, xb))
+        # Read each tile out with two 4-row MOVAs (tile-slice stores are slow,
+        # ~7.7 cycles each) and store the rows as vectors. x14, A's matrix
+        # pointer, is free by now and serves as the slice index (w12..w15 only).
+        E("mov w14, #0")
+        E("mov w15, #4")
+        for k, (tile, item, imag) in enumerate([(ta[0], "x13", 0), (ta[1], "x13", 1),
+                                                (ta[2], "x16", 0), (ta[3], "x16", 1)]):
+            zb = 8 * k
+            E("mova {z%d.d-z%d.d}, za%dh.d[w14, 0:3]" % (zb, zb + 3, tile))
+            E("mova {z%d.d-z%d.d}, za%dh.d[w15, 0:3]" % (zb + 4, zb + 7, tile))
+            for t in range(8):
+                E("add x17, %s, %s" % (item, offs[t]))
+                if imag:
+                    E("st1d {z%d.d}, p0, [x17, #1, mul vl]" % (zb + t))
+                else:
+                    E("st1d {z%d.d}, p0, [x17]" % (zb + t))
+
+    g.label("1")
+    pair(0)
+    E("subs x26, x26, #1")
+    E("b.eq 2f")
+    pair(1)
+    E("subs x26, x26, #1")
+    E("b.ne 1b")
+    g.label("2")
+    E("smstop")
+    g.out.append(RESTORE)
+    E("ret")
+
+
+def write(outdir, fname, g, arch=None):
+    lines = ([arch] if arch else []) + [".text"] + g.out
     if g.consts:
         lines.append("")
         lines.append(".section __TEXT,__const")
@@ -726,7 +931,8 @@ def main():
     for p in (2, 3, 4, 5, 7, 8):
         for d in ("dif", "dit"):
             for mode in ("tw", "notw", "t4"):
-                gen_stage(g, p, d, mode)
+                for layout in ("a", "b"):
+                    gen_stage(g, p, d, mode, layout)
     write(outdir, "fft_stages.S", g)
     g = Gen()
     for mode in ("a", "b", "c"):
@@ -739,7 +945,12 @@ def main():
     g = Gen()
     gen_rows(g)
     gen_split_sq(g)
+    gen_cmul_b(g, False)
+    gen_cmul_b(g, True)
     write(outdir, "pass2.S", g)
+    g = Gen()
+    gen_sme_r8(g)
+    write(outdir, "sme.S", g, arch=".arch armv9-a\n.arch_extension sme2\n.arch_extension sme-f64f64")
 
 
 if __name__ == "__main__":

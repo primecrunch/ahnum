@@ -12,7 +12,15 @@
     void ahn_##dir##_r##p##_t4(double *base, size_t estride, size_t nlg, size_t nblocks,   \
                                size_t bstride, ptrdiff_t delta);
 
-#define AHN_STAGES(p) AHN_STAGE(dif, p) AHN_STAGE(dit, p)
+#define AHN_STAGE_B(dir, p)                                                                    \
+    void ahn_##dir##_r##p##_b(double *base, size_t estride, size_t nlg, size_t nblocks,       \
+                              size_t bstride, size_t s, const double *tw);                    \
+    void ahn_##dir##_r##p##_notw_b(double *base, size_t estride, size_t nlg, size_t nblocks,  \
+                                   size_t bstride, size_t s, const double *tw);               \
+    void ahn_##dir##_r##p##_t4_b(double *base, size_t estride, size_t nlg, size_t nblocks,    \
+                                 size_t bstride, ptrdiff_t delta);
+
+#define AHN_STAGES(p) AHN_STAGE(dif, p) AHN_STAGE(dit, p) AHN_STAGE_B(dif, p) AHN_STAGE_B(dit, p)
 AHN_STAGES(2)
 AHN_STAGES(3)
 AHN_STAGES(4)
@@ -21,6 +29,7 @@ AHN_STAGES(7)
 AHN_STAGES(8)
 #undef AHN_STAGES
 #undef AHN_STAGE
+#undef AHN_STAGE_B
 
 #include <stdint.h>
 #define AHN_NORM(m)                                                                         \
@@ -46,6 +55,11 @@ AHN_NORM(cq)
 
 void ahn_rows_in(const double *rp, const double *rpp, double *scr, size_t C);
 void ahn_rows_out(double *rp, double *rpp, const double *scr, size_t C);
+// SME radix-8 stage (layout b), see gen_sme_r8. Requires FEAT_SME_F64F64.
+void ahn_sme_r8(double *base, size_t estride, size_t nblocks, size_t bstride, size_t s,
+                const double *mats);
+void ahn_cmul_b(double *base, size_t estride, size_t n, ptrdiff_t delta);
+void ahn_cmulc_b(double *base, size_t estride, size_t n, ptrdiff_t delta);
 void ahn_split_sq(double *scr, size_t C, const double *rs, const double *cs);
 
 #endif
