@@ -1,0 +1,4 @@
+build/
+*.ckpt
+*.ckpt.tmp
+.DS_Store
