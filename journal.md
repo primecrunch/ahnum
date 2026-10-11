@@ -419,3 +419,17 @@ That is −9.3%, more than the 7% bound for the transposes alone. 9001·2^662695
 Of the five planned items, only the transpose fusion (−9%) paid off. Per core, the NEON
 kernels run at the 4-pipe limit and the remaining passes are FP-bound. Under full load, about
 half the slowdown is the all-core clock drop and the rest is shared L2 bandwidth.
+
+## 16:35 — Throughput after the transpose fusion
+
+The same routine as before: 10 concurrent tests of 9001·2^662695−1, alternating prst and ahnum,
+with a 3-minute cool-down before each run.
+
+| Program | Run 1 | Run 2 |
+|---|---|---|
+| prst | 117.2 s per test (305.0/h) | 123.5 s (290.3/h) |
+| ahnum | 105.0 s per test (339.6/h) | 107.3 s (336.4/h) |
+
+ahnum gives 336–340 tests/hour against prst's 290–305, about 10–16% more throughput. It is
+also 11% faster on a single test (80.3 s against 90.2 s). The two ahnum runs agree within 1%;
+prst's differ by 5%.
