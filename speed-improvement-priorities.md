@@ -11,16 +11,11 @@ pass-2 forward and inverse stages ~11–12% each, split 10%, row transposes in/o
 
 ## Candidates
 
-1. **Fuse the normaliser with its neighbouring column stages.** Expected 2–5%, uncertain. The
-   normaliser runs at 100% of the FP limit in isolation but ~86% in the loop, and pass-1 inverse
-   stages at ~80%. One kernel per group (last inverse stage + normalise + first forward stage)
-   removes a store/reload and lets butterfly work overlap the carry-chain latency. Measure a
-   bound first.
-2. **Tangent-form twiddles in the forward (DIF) stages.** Expected ~3–4%, large change. The bound
+1. **Tangent-form twiddles in the forward (DIF) stages.** Expected ~3–4%, large change. The bound
    for removing all stage twiddle multiplies is 11–14%, and the DIT half gave 2.5–4.6%. DIF needs
    each stage's output twiddles moved to the next stage's inputs, leftover scales folded into
    the four-step table, and unscaled values delivered to the split.
-3. **Pass-2 rows-in stage (~77% of the FP limit).** It loads both rows from L2. Look at
+2. **Pass-2 rows-in stage (~77% of the FP limit).** It loads both rows from L2. Look at
    reordering or a larger first radix so there is more compute per byte loaded. No bound yet.
 
 ## Done
@@ -34,6 +29,11 @@ pass-2 forward and inverse stages ~11–12% each, split 10%, row transposes in/o
 
 ## Tried and dropped
 
+- Fusing the normaliser with its neighbouring column stages (2026-10-11): timing pass 1 with the
+  normaliser skipped (B) and with the column stages skipped (C) gives B + C − A = 52.5 µs at
+  49152, matching pass 2 alone (~53 µs). The joins between phases cost nothing measurable, so
+  fusion has no bound. The normaliser costs ~19.5 µs whether it follows the stages or reads cold
+  from L2.
 - Safety margin 0.1 instead of 0.2 bits/word (2026-10-11): max round-off reaches 0.344–0.375
   within 20,000 squarings (L = 32768 k = 3, L = 49152 k = 255), too close to the 0.40 retry
   threshold for full tests, which run 30–100× more squarings.

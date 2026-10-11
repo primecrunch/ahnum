@@ -618,3 +618,21 @@ Last round's six-point sweep showed 0.30–0.31 at margin 0.1. The wider sweep f
 and full tests run 30–100× more squarings, so margin 0.1 would sit at the 0.40 retry threshold.
 A retry restarts at a larger FFT and costs far more than the ~0.5–1% saving. `BPW_MARGIN` stays
 at 0.2. The tangent kernels lowered round-off at margin 0.2 but did not move the safe margin.
+
+## 20:51 — Normaliser fusion: no bound
+
+Fusion would only help if the joins between the inverse stages, the normaliser and the
+forward stages cost something: the group's store and reload, or lost overlap between kernels.
+I timed pass 1 three ways with a temporary switch (µs per squaring, best of 3, quiet machine):
+
+| Number | all (A) | normaliser skipped (B) | column stages skipped (C) | B + C − A |
+|---|---|---|---|---|
+| 9001·2^662695−1 | 111.1 | 91.6 | 72.0 | 52.5 |
+| 9999·2^1500000−1 | 294.1 | 249.7 | 197.7 | 153.3 |
+
+If the joins are free, B + C − A equals the time outside pass 1. At 49152 that is pass 2, ~53 µs
+by the profiler, so the joins cost nothing measurable. The normaliser costs ~19.5 µs whether it
+runs after the stages (data in L1) or alone (data from L2). Its ~16% shortfall against the
+isolated kernel rate is inside the kernel itself. Dropped. (Skipping the normaliser lets the
+values overflow to NaN and inf; Apple's FP units showed no slowdown for that, since B came out
+as consistent as A.)
