@@ -71,6 +71,7 @@ int main(int argc, char **argv) {
         uint64_t n = 600 + rng() % (tr < trials / 2 ? 3000 : 60000);
         // Odd trials force a low bits/word so k spans several top words.
         ahn_opts oo = o;
+        oo.plan_order = 1 + (uint32_t)(tr / 2 % 4);  // all four FFT stage orders
         if (tr & 1) {
             uint32_t L = (uint32_t)(n / (6 + rng() % 6));
             L = (L + 63) & ~63u;

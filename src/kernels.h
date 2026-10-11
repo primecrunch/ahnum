@@ -20,6 +20,18 @@
     void ahn_##dir##_r##p##_t4_b(double *base, size_t estride, size_t nlg, size_t nblocks,    \
                                  size_t bstride, ptrdiff_t delta);
 
+// Tangent-form DIT stages: tw is the ahn_tan_table layout (p in 2, 3, 4, 8).
+#define AHN_STAGE_TAN(p)                                                                  \
+    void ahn_dit_r##p##_tan(double *base, size_t estride, size_t nlg, size_t nblocks,    \
+                            size_t bstride, size_t s, const double *tw);                 \
+    void ahn_dit_r##p##_tan_b(double *base, size_t estride, size_t nlg, size_t nblocks,  \
+                              size_t bstride, size_t s, const double *tw);
+AHN_STAGE_TAN(2)
+AHN_STAGE_TAN(3)
+AHN_STAGE_TAN(4)
+AHN_STAGE_TAN(8)
+#undef AHN_STAGE_TAN
+
 #define AHN_STAGES(p) AHN_STAGE(dif, p) AHN_STAGE(dit, p) AHN_STAGE_B(dif, p) AHN_STAGE_B(dit, p)
 AHN_STAGES(2)
 AHN_STAGES(3)
@@ -51,6 +63,11 @@ AHN_NORM(aqe)
 AHN_NORM(bq)
 AHN_NORM(bqe)
 AHN_NORM(cq)
+AHN_NORM(ao)
+AHN_NORM(aoe)
+AHN_NORM(bo)
+AHN_NORM(boe)
+AHN_NORM(co)
 #undef AHN_NORM
 
 void ahn_rows_in(const double *rp, const double *rpp, double *scr, size_t C);
@@ -63,6 +80,7 @@ void ahn_cmulc_b(double *base, size_t estride, size_t n, ptrdiff_t delta);
 // First/last row-FFT stage (radix 4, s = C/4) fused with the row-pair transpose.
 void ahn_dif_r4_rows(const double *rp, const double *rpp, double *scr, size_t C, const double *tw);
 void ahn_dit_r4_rows(double *rp, double *rpp, const double *scr, size_t C, const double *tw);
+void ahn_dit_r4_rows_tan(double *rp, double *rpp, const double *scr, size_t C, const double *tw);
 void ahn_split_sq(double *scr, size_t C, const double *rs, const double *cs);
 
 #endif

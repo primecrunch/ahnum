@@ -433,3 +433,165 @@ with a 3-minute cool-down before each run.
 ahnum gives 336–340 tests/hour against prst's 290–305, about 10–16% more throughput. It is
 also 11% faster on a single test (80.3 s against 90.2 s). The two ahnum runs agree within 1%;
 prst's differ by 5%.
+
+## 17:15 — Second speed-up round: where the cycles go
+
+The last round assumed the kernels run at the 4-pipe limit everywhere. They do in isolation, but
+counting the generated instructions (`tools/count_ops.py`) against the measured time says the
+whole squaring at 49152 ran at about 75% of that. The distributed compute project was not
+running. I misread a load average of ~3 as outside load, but it was my own builds and
+benchmarks. From about 17:00 my residue-suite run kept one other core busy, so the later
+measurements (the order sweep, the ~4.2 GHz clock estimate, the tangent A/B) shared the cluster
+with it. A/B pairs saw the same conditions; the absolute numbers will be repeated with nothing else running.
+
+**Phase profiler.** `AHN_PROF=1` accumulates `cntvct` ticks per phase on thread 0 and prints the
+split at exit. Its total agrees with the untimed figure to within ~2%. Measured ceiling under this
+load: `frintn`, `fmul`, `fsub` and `trn1` each run at ~16.5 per ns (4 per cycle at ~4.2 GHz).
+Against that, at 49152 (R = 96, C = 256):
+
+| Phase | Share of ceiling |
+|---|---|
+| p1 forward stages | 95% |
+| p2 fwd stages, split | 92% |
+| p2 inv stages | 87% |
+| p1 inverse stages | 80% |
+| p2 rows in | 77% |
+| normaliser | 80% (see below) |
+
+**Normaliser: latency, not throughput.** With 2 carry chains in flight, each digit's link is
+fmla → frintn, about 6.6 cycles, against 16 ops of work, which predicts 2.46 ops/cycle. Outside
+error-check squarings it measured 2.45. Rewriting the table record as {osc, 1/base, base·w}
+lets each digit be worked in place in one register:
+
+    D = rint(D·osc)·ib;  D += cin·ib;  cin = rint(D);  D = (D − cin)·bw
+
+Every step before the last multiply is a power-of-two scaling of an integer below 2^53, so it is
+exact, and (D − cin)·(base·w) rounds the same as the old x·w. The output is bit-identical: maxerr
+and residues match on every test number. It is 7 ops instead of 8 (9 instead of 10 with error
+tracking), the table is 25% smaller (1.15 MB instead of 1.5 MB at 49152), and with only D and the
+carry live per chain, 4 row pairs (8 rows) fit in the 32 registers. In L1 the new kernel runs at
+16.1 ops/ns, the full ceiling. 49152 went from 124.6 to 118.7 µs (−4.7%) in back-to-back runs. In
+place it still reaches only ~86%; making the table L1-resident (a deliberately wrong build)
+recovered just 1 µs, and the last-rows C path costs 0.12 µs, so the remainder is not
+explained yet.
+
+Mode b (group 0's first visit) now stores digit/base, which mode c consumes directly, so neither
+needs `base` itself.
+
+**Set aside:**
+- *Software prefetch of the next pass-1 group:* 2% slower. The hardware prefetcher already
+  follows the 4224-byte stride, and the extra prefetches only add L1 pressure.
+- *Moving the special row pair (k_r = 0, R/2) out of scalar C:* it costs 0.62 µs (0.5%), against
+  ~0.29 µs for a vector pair, so there is ~0.3 µs to gain.
+
+**Radix order matters.** `factorize` puts radix 8 first and the odd radix last, so at 49152 the
+column s = 1 stage (the one that loads the group from L2 and applies the four-step twiddle)
+was radix 3, which has little compute per byte. Reversing it to [3, 4, 8] saved 3.4 µs (−2.7%).
+A sweep of ascending versus default order for the column and row plans:
+
+| L | default | col asc | row asc | both |
+|---|---|---|---|---|
+| 24576 | 60.8 | 60.8 | 59.8 | 59.4 |
+| 40960 | 100.4 | 100.4 | 102.6 | 103.7 |
+| 65536 | 170.3 | 163.2 | 169.2 | 163.5 |
+| 98304 | 275.5 | 264.5 | 266.4 | 260.6 |
+| 131072 | 376.9 | 373.2 | 361.4 | 346.5 |
+
+No order wins everywhere, so the order is now tuned per length. `ahbench tune` times all four
+orders interleaved and writes "L us order", the context reads the third column (old two-column
+files still parse), `ahn_opts.plan_order` overrides it, and `ahbench --order` exposes that.
+`test_gmp` cycles through all four orders, and the residue suite passes in each.
+
+**Twiddle bound for item 2.** Deleting every stage-twiddle multiply (wrong results) gives the upper
+bound: 67.6 → 60.0 µs at 28672, 120.3 → 103.7 at 49152, 320.9 → 275.3 at 114688, so 11–14%.
+Vector `mov` is eliminated at rename (16 mov+fmla pairs take the time of 16 fmla), so the
+tangent form w = c·(1 + iτ) costs 2 FMAs, with c folded into the butterfly's following FMAs.
+For DIT stages, where twiddles sit on the inputs, every scale folds: radix 8 drops from 84 to
+66 ops, radix 4 from 28 to 22, radix 3 from 22 to 18. τ can be large near cos θ = 0 without hurting
+accuracy, because the error stays ~ε·|x|. Only an exact zero needs care (use c = 2^-60). DIF stages
+are harder: the trick does not transpose (radix 2 stays at 8 ops). Gaining there means moving
+each stage's output twiddles into the next stage's inputs and carrying the leftover scales
+down to the four-step table.
+
+## 17:30 — Tangent-form DIT twiddles
+
+New kernels `ahn_dit_r{2,3,4,8}_tan[_b]` and `ahn_dit_r4_rows_tan` take a per-j table of tangents
+and scale ratios built by `ahn_tan_table` (src/neon.c). Every DIT stage with s > 1 uses them,
+in both pass-1 inverse column stages and pass-2 inverse row stages. Radices 5 and 7 keep the
+complex multiply, because folding the scales into their cosine/sine constants needs more scalar
+registers than they have free. The DIF (forward) side is unchanged.
+
+Scale bookkeeping in the radix-8 DIT, input scales c_t after x_t (1 + iτ_t):
+- Layer 1: (x0, x4) folds c4 → scale 1. (x1, x5), (x2, x6), (x3, x7) fold c5/c1, c6/c2, c7/c3
+  → scales c1, c2, c3.
+- W8 multiplies lose their √½ multiply. For W8³ the factor is −c·(1 − i), a uniform real
+  scale once the sign moves into it.
+- Layer 2 folds c2 and c3/c1, or −c3/c1 on the W8³ side. Layer 3 folds c1 or c1·√½.
+
+Every output comes out at unit scale with no extra multiply. Per j that is 7 tangents plus 9
+scale scalars, 8 q-registers against the old 7, and the radix-8 constant register is no longer
+needed. Op counts per butterfly: radix 8 84 → 66, radix 4 28 → 22, radix 3 22 → 18, radix 2 8 → 6,
+fused rows radix 4 56 → 44.
+
+Accuracy: against the scalar reference the new kernels match the old ones (1.8e-15 for radix 8),
+including s = 8 and 16, where cos θ = 0 exactly and the table stores c = 2^-60. Max round-off
+at the selection boundary over 20,000 squarings is equal or lower everywhere:
+
+| L | k | tangent | old |
+|---|---|---|---|
+| 32768 | 3 | 0.2500 | 0.2500 |
+| 32768 | 255 | 0.2812 | 0.3125 |
+| 32768 | 9999 | 0.2500 | 0.2812 |
+| 98304 | 3 | 0.2500 | 0.2500 |
+| 98304 | 255 | 0.2500 | 0.2539 |
+| 98304 | 9999 | 0.2500 | 0.2812 |
+
+Speed in back-to-back runs, with my residue-suite job busy on another core (µs per squaring, `AHN_NO_TAN=1` for the old path):
+
+| Number | FFT | old | tangent |
+|---|---|---|---|
+| 9357·2^369717−1 | 28672 | 67.3 | 65.5 (−2.7%) |
+| 3·2^400000−1 | 24576 | 46.7 | 45.4 (−2.7%) |
+| 9001·2^662695−1 | 49152 | 119.5 | 115.9 (−3.0%) |
+| 9999·2^1500000−1 | 114688 | 320.5 | 308.5 (−3.7%) |
+
+That is about half of the DIT half of the 11–14% bound, as expected for saving 2 of every 4
+twiddle ops.
+
+**Item 4 dropped.** Folding the split's four doublings into FMAs saves 1–2 of its 30 FP ops
+(~0.3%), since the factor 2 lands on terms that need a negation to fold. The scalar special pair
+is ~0.3 µs. Neither clears the 3% bar.
+
+## 17:50 — Quiet-machine results for this round
+
+Nothing else was running (the distributed compute project was off, and my own residue job was
+stopped first). µs per squaring, best of 3, interleaved:
+
+| Number | Original | + normaliser | + tangent DIT | + tuned order |
+|---|---|---|---|---|
+| 3·2^400000−1 | 47.5 | 45.9 | 44.6 | — |
+| 9357·2^369717−1 | 68.6 | 66.4 | 64.6 | 64.3 (now picks 26880) |
+| 9001·2^662695−1 | 121.3 | 117.9 | 115.0 | 113.0 (−6.8%) |
+| 8243·2^872226−1 | 168.0 | 164.2 | 156.7 | 153.5 (−8.6%) |
+| 9999·2^1500000−1 | 324.3 | 315.9 | 304.7 | 298.0 (−8.1%) |
+
+**Re-tune.** `ahbench tune 8192 196608` with all four stage orders took 104 s. The default order is
+fastest at only 24 of 169 lengths. Column ascending won 30, row ascending 41, and both ascending
+74. The new table is 6–16% faster than the old one length for length (49152: 128.7 → 113.1;
+98304: 290.6 → 245.3). It is installed as `~/.ahnum/fft_times.txt` and
+`tune/fft_times_m4pro.txt`; the old file is kept in the session scratchpad.
+
+**Full tests.** 9001·2^662695−1 single-core: 74.6 s and 74.9 s, against 80.3 s (−7%). Max round-off
+was 0.25, with no Gerbicz errors or retries. 10 concurrent tests, after a 3-minute cool-down:
+96.8–97.3 s each, 371 tests/hour, against 336–340 last round (+9–10%). Against the earlier prst
+runs (290–305/h) that is ~22–28% more throughput, though prst was not rerun today. The
+throughput command logged only the times, so those ten residues were not individually checked.
+The single runs matched.
+
+By step: normaliser −2.3 to −3.4%, tangent DIT −2.5 to −4.6%, tuned order −0.5 to −2%. The
+loaded-machine order sweep had suggested more at 49152 (−2.7%). I have not measured whether the
+tangent kernels changed which order wins there.
+
+Residue suite (28 known residues, n up to 872226) on the final build: orders 2 and 3 pass 28/28.
+Order 1 passed 28/28 earlier on the pre-tangent build, and order 0 passes via ctest. test_gmp
+cycles through all four orders against GMP.

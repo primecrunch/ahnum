@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "internal.h"
 #include "kernels.h"
 
 typedef void (*stage_fn)(double *, size_t, size_t, size_t, size_t, size_t, const double *);
@@ -125,6 +126,54 @@ int main(void) {
             }
         }
     }
+    }
+    // Tangent-form DIT stages vs the reference with the matching true twiddles
+    // w = e^{-2 pi i t j / (p s)}; s = 8 and 16 put cos(theta) = 0 exactly on
+    // some inputs, which the table stores as c = 2^-60.
+    static const struct {
+        int p;
+        stage_fn f[2];
+    } tant[] = {{2, {ahn_dit_r2_tan, ahn_dit_r2_tan_b}},
+                {3, {ahn_dit_r3_tan, ahn_dit_r3_tan_b}},
+                {4, {ahn_dit_r4_tan, ahn_dit_r4_tan_b}},
+                {8, {ahn_dit_r8_tan, ahn_dit_r8_tan_b}}};
+    static const size_t tans[] = {5, 8, 16};
+    for (int layout = 0; layout < 2; layout++) {
+        g_imoff = layout ? 8 : 2;
+        g_lgstep = layout ? 16 : 32;
+        for (size_t i = 0; i < 4; i++) {
+            for (size_t si = 0; si < 3; si++) {
+                int p = tant[i].p;
+                size_t s = tans[si], nlg = layout ? 4 : 3, nb = 3;
+                size_t es = layout ? 128 + 64 : 32 * nlg + 64;
+                size_t bs = p * s * es + 96, bytes = nb * bs + 64;
+                double *a = calloc(bytes / 8 + 16, 8), *b = calloc(bytes / 8 + 16, 8);
+                for (size_t k = 0; k < bytes / 8; k++) a[k] = rnd();
+                memcpy(b, a, bytes);
+                double *tw = malloc(s * (p - 1) * 2 * sizeof(double));
+                for (size_t j = 0; j < s; j++) {
+                    for (int t = 1; t < p; t++) {
+                        double ang = 2.0 * (double)((t * j) % (p * s)) / (double)(p * s);
+                        tw[2 * (j * (p - 1) + t - 1)] = __cospi(ang);
+                        tw[2 * (j * (p - 1) + t - 1) + 1] = -__sinpi(ang);
+                    }
+                }
+                double *tt = malloc(s * ahn_tan_nscal(p) * sizeof(double));
+                ahn_tan_table(p, s, tt);
+                tant[i].f[layout](a, es, nlg, nb, bs, s, tt);
+                ref_stage(b, p, 1, 0, es, nlg, nb, bs, s, tw, 0);
+                double maxd = 0;
+                for (size_t k = 0; k < bytes / 8; k++) maxd = fmax(maxd, fabs(a[k] - b[k]));
+                int bad = maxd > 1e-12;
+                fails += bad;
+                printf("dit r%d tan  %c s=%-2zu %s maxdiff %.2e\n", p, layout ? 'b' : 'a', s,
+                       bad ? "FAIL" : "ok  ", maxd);
+                free(a);
+                free(b);
+                free(tw);
+                free(tt);
+            }
+        }
     }
     // SME radix-8 stage vs the reference, layout b, both directions
     g_imoff = 8;

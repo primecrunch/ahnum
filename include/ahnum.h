@@ -27,6 +27,9 @@ typedef struct {
     ahn_backend backend;
     uint32_t fft_len;      // 0 = choose automatically
     uint32_t threads;      // 0 or 1 = single threaded
+    // FFT stage order: 0 = from the tuning file (default order if untuned),
+    // else 1 + bits: bit 0 column radices ascending, bit 1 row radices ascending
+    uint32_t plan_order;
 } ahn_opts;
 
 // Only c = -1 (Riesel) is supported for now.

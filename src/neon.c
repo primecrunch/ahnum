@@ -17,11 +17,56 @@
 #include "threads.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <sys/sysctl.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define G 8
+#define NTAB_PAIR 96  // doubles of normaliser table per row pair
+
+// Phase profiler (AHN_PROF=1): accumulates counter ticks on thread 0 and
+// prints the split at exit. Off by default; the check is one load per phase.
+enum { PR_P1_INV, PR_P1_NORM, PR_P1_FWD, PR_P1_B, PR_P2_IN, PR_P2_FWD, PR_P2_SPLIT, PR_P2_INV,
+       PR_P2_OUT, PR_P2_SPEC, PR_P1_LAST, PR_N };
+static const char *prof_names[PR_N] = {"p1 inverse stages", "p1 normalise", "p1 forward stages",
+                                       "p1 phase b",        "p2 rows in (r4)", "p2 fwd stages",
+                                       "p2 split",          "p2 inv stages",   "p2 rows out (r4)", "p2 special pair (C)", "p1 last rows (C)"};
+static int prof_on = -1;
+static uint64_t prof_ticks[PR_N], prof_ops;
+static inline uint64_t prof_now(void) {
+    uint64_t t;
+    __asm__ volatile("isb\n\tmrs %0, cntvct_el0" : "=r"(t));
+    return t;
+}
+static void prof_report(void) {
+    uint64_t f, tot = 0;
+    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f));
+    for (int i = 0; i < PR_N; i++) tot += prof_ticks[i];
+    if (!prof_ops || !tot) return;
+    fprintf(stderr, "phase profile over %llu squarings (thread 0):\n", (unsigned long long)prof_ops);
+    for (int i = 0; i < PR_N; i++)
+        fprintf(stderr, "  %-20s %8.2f us  %5.1f%%\n", prof_names[i],
+                1e6 * prof_ticks[i] / f / prof_ops, 100.0 * prof_ticks[i] / tot);
+    fprintf(stderr, "  %-20s %8.2f us\n", "total", 1e6 * tot / f / prof_ops);
+}
+static inline int prof_enabled(void) {
+    if (prof_on < 0) {
+        const char *e = getenv("AHN_PROF");
+        prof_on = e && *e == '1';
+        if (prof_on) atexit(prof_report);
+    }
+    return prof_on;
+}
+#define PROF_T(t) uint64_t _pt = (prof && (t) == 0) ? prof_now() : 0
+#define PROF_MARK(t, ph)                       \
+    do {                                       \
+        if (prof && (t) == 0) {                \
+            uint64_t _n = prof_now();          \
+            prof_ticks[ph] += _n - _pt;        \
+            _pt = _n;                          \
+        }                                      \
+    } while (0)
 
 typedef void (*stage_fn)(double *, size_t, size_t, size_t, size_t, size_t, const double *);
 typedef void (*t4_fn)(double *, size_t, size_t, size_t, size_t, ptrdiff_t);
@@ -34,6 +79,9 @@ typedef struct {
     stage_fn tw_f[2], notw_f[2];
     t4_fn dif_t4[2], dit_t4[2];
     stage_fn dit_tw[2], dit_notw[2];
+    // tangent-form DIT (p in 2, 3, 4, 8 with s > 1, else NULL) and its table
+    stage_fn dit_tan[2];
+    double *twt;
     // radix-8 only: complex 8x8 matrices per j for the SME kernel (1 KB each),
     // DIF: diag(w_j) F8, DIT: conj(F8) diag(conj w_j)
     double *mdif, *mdit;
@@ -122,8 +170,64 @@ static void set_fns(stage *s) {
 #undef CASE
 }
 
-// first4: start with a radix-4 stage (the row FFT fuses it with the transpose)
-static int nplan_init(nplan *pl, uint32_t n, int first4) {
+// ---- tangent-form DIT twiddles --------------------------------------------
+
+uint32_t ahn_tan_nscal(uint32_t p) {
+    switch (p) {
+        case 2: return 2;
+        case 3: case 4: return 6;
+        case 8: return 16;
+    }
+    return 0;
+}
+
+// See the tangent-form note in gen/gen_kernels.py: input t of the butterfly at
+// j is multiplied by conj(w) = c_t (1 + i tau_t), theta_t = 2 pi t j / (p s).
+int ahn_tan_table(uint32_t p, uint32_t s, double *out) {
+    uint32_t ns = ahn_tan_nscal(p), sz = p * s;
+    if (!ns) return -1;
+    for (uint32_t j = 0; j < s; j++) {
+        double c[8] = {1}, tau[8] = {0};
+        for (uint32_t t = 1; t < p; t++) {
+            double a = 2.0 * (double)((uint64_t)t * j % sz) / sz;
+            double cs = __cospi(a), sn = __sinpi(a);
+            if (cs == 0) cs = 0x1p-60;
+            c[t] = cs;
+            tau[t] = sn / cs;
+        }
+        double *o = out + (size_t)j * ns;
+        for (uint32_t t = 1; t < p; t++) o[t - 1] = tau[t];
+        if (p == 2) {
+            o[1] = c[1];
+        } else if (p == 3) {
+            o[2] = c[2] / c[1];
+            o[3] = c[1] * -0.5;
+            o[4] = c[1] * 0.86602540378443864676;
+            o[5] = c[1];
+        } else if (p == 4) {
+            o[3] = c[2];
+            o[4] = c[3] / c[1];
+            o[5] = c[1];
+        } else {
+            o[7] = c[4];
+            o[8] = c[5] / c[1];
+            o[9] = c[6] / c[2];
+            o[10] = c[7] / c[3];
+            o[11] = c[2];
+            o[12] = c[3] / c[1];
+            o[13] = -c[3] / c[1];
+            o[14] = c[1];
+            o[15] = c[1] * 0.70710678118654752440;
+        }
+    }
+    return 0;
+}
+
+// first4: start with a radix-4 stage (the row FFT fuses it with the transpose).
+// asc: order the (remaining) radices ascending instead of 8, 4, 2, 7, 5, 3, which
+// puts the largest radix in the s = 1 stage; whichever is faster depends on the
+// length (`ahbench tune` records it).
+static int nplan_init(nplan *pl, uint32_t n, int first4, int asc) {
     uint8_t radix[32];
     int m;
     if (first4) {
@@ -134,6 +238,17 @@ static int nplan_init(nplan *pl, uint32_t n, int first4) {
         m += 1;
     } else {
         m = factorize(n, radix);
+    }
+    if (asc) {
+        for (int i = first4 ? 1 : 0; i < m; i++) {
+            for (int j = i + 1; j < m; j++) {
+                if (radix[j] < radix[i]) {
+                    uint8_t x = radix[i];
+                    radix[i] = radix[j];
+                    radix[j] = x;
+                }
+            }
+        }
     }
     if (m < 1) return -1;
     pl->n = n;
@@ -157,6 +272,24 @@ static int nplan_init(nplan *pl, uint32_t n, int first4) {
         st->nblocks = n / sz;
         st->tw = tp;
         set_fns(st);
+        st->twt = NULL;
+        st->dit_tan[0] = st->dit_tan[1] = NULL;
+        if (st->s > 1 && ahn_tan_nscal(st->p) && !getenv("AHN_NO_TAN")) {
+            st->twt = ahn_alloc((size_t)st->s * ahn_tan_nscal(st->p) * sizeof(double));
+            ahn_tan_table(st->p, st->s, st->twt);
+            switch (st->p) {
+#define TAN(P)                                \
+    case P:                                   \
+        st->dit_tan[0] = ahn_dit_r##P##_tan;   \
+        st->dit_tan[1] = ahn_dit_r##P##_tan_b; \
+        break;
+                TAN(2)
+                TAN(3)
+                TAN(4)
+                TAN(8)
+#undef TAN
+            }
+        }
         for (uint32_t j = 0; j < st->s; j++) {
             for (uint32_t t = 1; t < st->p; t++) {
                 double a = 2.0 * (double)((uint64_t)t * j % sz) / sz;
@@ -207,6 +340,7 @@ static int nplan_init(nplan *pl, uint32_t n, int first4) {
 
 static void nplan_free(nplan *pl) {
     for (uint32_t i = 0; i < pl->nst; i++) {
+        ahn_free_aligned(pl->st[i].twt);
         ahn_free_aligned(pl->st[i].mdif);
         ahn_free_aligned(pl->st[i].mdit);
     }
@@ -239,6 +373,8 @@ static void plan_inv(const nplan *pl, int lay, double *base, size_t es, size_t n
         if (st->s == 1) {
             if (t4) st->dit_t4[lay](base, es, nlg, st->nblocks, bs, delta);
             else st->dit_notw[lay](base, es, nlg, st->nblocks, bs, 1, NULL);
+        } else if (st->dit_tan[lay]) {
+            st->dit_tan[lay](base, es, nlg, st->nblocks, bs, st->s, st->twt);
         } else {
             st->dit_tw[lay](base, es, nlg, st->nblocks, bs, st->s, st->tw);
         }
@@ -277,6 +413,22 @@ static int choose_shape(uint32_t H, uint32_t *R, uint32_t *C) {
     return 0;
 }
 
+typedef struct {
+    double w, iw, osc, base;
+} dinfo;
+
+static inline dinfo digit_info(const neon_state *st, uint32_t g, uint32_t r, uint32_t i) {
+    size_t idx = (size_t)g * st->R + r;
+    uint64_t m = st->mask[idx];
+    dinfo d;
+    double e2 = (m >> i) & 1 ? 0.5 : 1.0;
+    d.w = st->A[idx] * st->B[i] * e2;
+    d.iw = st->IA[idx] * st->IB[i] / e2;
+    d.osc = st->IA[idx] * st->IBs[i] / e2;
+    d.base = (m >> (16 + i)) & 1 ? 2 * st->base_small : st->base_small;
+    return d;
+}
+
 #define s_at ahn_s_at
 #define weight_at ahn_weight
 
@@ -307,7 +459,9 @@ static int neon_init_impl(ahn_ctx *ctx, int sme) {
     st->ngroups = C / G;
     if (ctx->L - ctx->top_t > 2 * G) return -1;
     st->rowstride = (size_t)C * 16 + 128;
-    if (nplan_init(&st->pr, R, 0) || nplan_init(&st->pc, C, 1)) return -1;
+    if (nplan_init(&st->pr, R, 0, ctx->plan_order & 1) ||
+        nplan_init(&st->pc, C, 1, (ctx->plan_order >> 1) & 1))
+        return -1;
     for (uint32_t q = 0; q < C; q++) {
         if (st->pc.pos[C - 1 - st->pc.rev[q]] != C - 1 - q) return -1;
     }
@@ -376,24 +530,21 @@ static int neon_init_impl(ahn_ctx *ctx, int sme) {
         }
     }
 
-    // table-driven normaliser for sizes where the extra traffic stays in cache
+    // table-driven normaliser for sizes where the extra traffic stays in cache:
+    // per row pair and digit i, {osc[2], 1/base[2], base*w[2]} (see gen_norm_tab)
     if (H <= (1u << 17) && !getenv("AHN_NO_NTAB")) {
-        st->ntab = ahn_alloc((size_t)st->ngroups * (R / 2) * 16 * 8 * sizeof(double));
+        st->ntab = ahn_alloc((size_t)st->ngroups * (R / 2) * NTAB_PAIR * sizeof(double));
         double *t = st->ntab;
         for (uint32_t g = 0; g < st->ngroups; g++) {
             for (uint32_t r = 0; r < R; r += 2) {
                 for (uint32_t i = 0; i < 16; i++) {
                     for (uint32_t l = 0; l < 2; l++) {
-                        size_t idx = (size_t)g * R + r + l;
-                        uint64_t m = st->mask[idx];
-                        double e2 = (m >> i) & 1 ? 0.5 : 1.0;
-                        double base = (m >> (16 + i)) & 1 ? 2 * st->base_small : st->base_small;
-                        t[0 + l] = st->IA[idx] * st->IBs[i] / e2;
-                        t[2 + l] = st->A[idx] * st->B[i] * e2;
-                        t[4 + l] = 1.0 / base;
-                        t[6 + l] = base;
+                        dinfo di = digit_info(st, g, r + l, i);
+                        t[0 + l] = di.osc;
+                        t[2 + l] = 1.0 / di.base;
+                        t[4 + l] = di.base * di.w;
                     }
-                    t += 8;
+                    t += 6;
                 }
             }
         }
@@ -467,22 +618,6 @@ static void neon_free(ahn_ctx *ctx) {
 
 // ---- weights / digits helpers ---------------------------------------------
 
-typedef struct {
-    double w, iw, osc, base;
-} dinfo;
-
-static inline dinfo digit_info(const neon_state *st, uint32_t g, uint32_t r, uint32_t i) {
-    size_t idx = (size_t)g * st->R + r;
-    uint64_t m = st->mask[idx];
-    dinfo d;
-    double e2 = (m >> i) & 1 ? 0.5 : 1.0;
-    d.w = st->A[idx] * st->B[i] * e2;
-    d.iw = st->IA[idx] * st->IB[i] / e2;
-    d.osc = st->IA[idx] * st->IBs[i] / e2;
-    d.base = (m >> (16 + i)) & 1 ? 2 * st->base_small : st->base_small;
-    return d;
-}
-
 // digit i of row r in group g lives at column g*8 + i/2, re (i even) / im
 static inline double *dptr(const neon_state *st, double *d, uint32_t g, uint32_t r, uint32_t i) {
     return elem(st, d, r, g * G + i / 2) + ((i & 1) ? IM : 0);
@@ -530,6 +665,8 @@ static void group_inv(neon_state *st, double *d, uint32_t g) {
             ahn_sme_r8(base, es, s->nblocks, bs, s->s, s->mdit);
         } else if (s->s == 1) {
             s->dit_t4[1](base, es, 4, s->nblocks, bs, delta);
+        } else if (s->dit_tan[1]) {
+            s->dit_tan[1](base, es, 4, s->nblocks, bs, s->s, s->twt);
         } else {
             s->dit_tw[1](base, es, 4, s->nblocks, bs, s->s, s->tw);
         }
@@ -643,15 +780,25 @@ static void norm_rows(ahn_ctx *ctx, neon_state *st, double *d, double *carr, uin
     double e;
     static const norm_fn qfns[3][2] = {
         {ahn_norm_aq, ahn_norm_aqe}, {ahn_norm_bq, ahn_norm_bqe}, {ahn_norm_cq, ahn_norm_cq}};
+    static const norm_fn ofns[3][2] = {
+        {ahn_norm_ao, ahn_norm_aoe}, {ahn_norm_bo, ahn_norm_boe}, {ahn_norm_co, ahn_norm_co}};
     if (st->ntab) {
-        const double *t = st->ntab + ((size_t)g * (st->R / 2) + r0 / 2) * 128;
-        size_t np = (r1 - r0) / 2, nq = np & ~(size_t)1;
+        // four row pairs per call where possible (eight carry chains in flight)
+        const double *t = st->ntab + ((size_t)g * (st->R / 2) + r0 / 2) * NTAB_PAIR;
+        size_t np = (r1 - r0) / 2, no = np & ~(size_t)3, done = no;
         e = 0;
-        if (nq) e = qfns[mode][err](gb, st->rowstride, nq, carr + r0, t, NULL, NULL, NULL);
-        if (np & 1) {
-            double e2 = fns[mode][1][err]((double *)((char *)gb + nq * 2 * st->rowstride),
-                                          st->rowstride, 1, carr + r0 + 2 * nq,
-                                          t + nq * 128, NULL, NULL, NULL);
+        if (no) e = ofns[mode][err](gb, st->rowstride, no, carr + r0, t, NULL, NULL, NULL);
+        if ((np - done) & 2) {
+            double e2 = qfns[mode][err]((double *)((char *)gb + done * 2 * st->rowstride),
+                                        st->rowstride, 2, carr + r0 + 2 * done,
+                                        t + done * NTAB_PAIR, NULL, NULL, NULL);
+            if (e2 > e) e = e2;
+            done += 2;
+        }
+        if (np - done) {
+            double e2 = fns[mode][1][err]((double *)((char *)gb + done * 2 * st->rowstride),
+                                          st->rowstride, 1, carr + r0 + 2 * done,
+                                          t + done * NTAB_PAIR, NULL, NULL, NULL);
             if (e2 > e) e = e2;
         }
     } else {
@@ -669,18 +816,27 @@ static void pass1_a(void *arg, int t, int n) {
     double *d = st->d, *carr = st->carry[t], maxerr = 0;
     uint32_t R = st->R, NG = st->ngroups, g0 = st->gstart[t], g1 = st->gstart[t + 1];
     (void)n;
+    int prof = prof_enabled();
+    PROF_T(t);
     group_inv(st, d, g0);
+    PROF_MARK(t, PR_P1_INV);
     memset(carr, 0, R * sizeof(double));  // mode b takes its carry-in from the array
     norm_rows(ctx, st, d, carr, g0, 0, R, 1, &maxerr);
+    PROF_MARK(t, PR_P1_NORM);
     for (uint32_t g = g0 + 1; g < g1; g++) {
         group_inv(st, d, g);
+        PROF_MARK(t, PR_P1_INV);
         if (g == NG - 1) {
             norm_rows(ctx, st, d, carr, g, 0, R - 2, 0, &maxerr);
+            PROF_MARK(t, PR_P1_NORM);
             norm_last_rows(ctx, st, d, carr, &maxerr, &st->wrapq);
+            PROF_MARK(t, PR_P1_LAST);
         } else {
             norm_rows(ctx, st, d, carr, g, 0, R, 0, &maxerr);
         }
+        PROF_MARK(t, PR_P1_NORM);
         group_fwd(st, d, g);
+        PROF_MARK(t, PR_P1_FWD);
     }
     st->maxerr_t[t] = maxerr;
 }
@@ -700,8 +856,12 @@ static void pass1_b(void *arg, int t, int n) {
         memcpy(cin, st->carry[t - 1], R * sizeof(double));
     }
     double maxerr = 0;
+    int prof = prof_enabled();
+    PROF_T(t);
     norm_rows(st->ctx, st, st->d, cin, g0, 0, R, 2, &maxerr);
     group_fwd(st, st->d, g0);
+    PROF_MARK(t, PR_P1_B);
+    if (t == 0 && prof) prof_ops++;
     if (cin != in) free(cin);
 }
 
@@ -830,6 +990,8 @@ static void pass2_job(void *arg, int t, int n) {
     double *d = st->d, *s = st->scr[t];
     uint32_t i0 = (uint32_t)((uint64_t)st->npairs * t / n);
     uint32_t i1 = (uint32_t)((uint64_t)st->npairs * (t + 1) / n);
+    int prof = prof_enabled();
+    PROF_T(t);
     for (uint32_t i = i0; i < i1; i++) {
         uint32_t p = st->pairs[i][0], pp = st->pairs[i][1];
         double *rp = (double *)((char *)d + p * st->rowstride);
@@ -837,28 +999,36 @@ static void pass2_job(void *arg, int t, int n) {
         // first stage fused with the transpose, then the rest of the row FFT
         const stage *s0 = &st->pc.st[0];
         ahn_dif_r4_rows(rp, rpp, s, C, s0->tw);
+        PROF_MARK(t, PR_P2_IN);
         for (uint32_t k = 1; k < st->pc.nst; k++) {
             const stage *sk = &st->pc.st[k];
             size_t bs = (size_t)sk->s * sk->p * 32;
             if (sk->s == 1) sk->notw_f[0](s, 32, 1, sk->nblocks, bs, 1, NULL);
             else sk->tw_f[0](s, 32, 1, sk->nblocks, bs, sk->s, sk->tw);
         }
+        PROF_MARK(t, PR_P2_FWD);
         const double *y = st->mul ? st->yscr + (size_t)i * 4 * C : NULL;
         if (i == 0) {
             split_special_c(st, s, y, p, pp);
+            PROF_MARK(t, PR_P2_SPEC);
         } else if (!y) {
             double rs[4] = {st->rs[2 * p], st->rs[2 * pp], st->rs[2 * p + 1], st->rs[2 * pp + 1]};
             ahn_split_sq(s, C, rs, st->cs);
         } else {
             split_pair_c(st, s, y, p, pp);
         }
+        PROF_MARK(t, PR_P2_SPLIT);
         for (uint32_t k = st->pc.nst; k-- > 1;) {
             const stage *sk = &st->pc.st[k];
             size_t bs = (size_t)sk->s * sk->p * 32;
             if (sk->s == 1) sk->dit_notw[0](s, 32, 1, sk->nblocks, bs, 1, NULL);
+            else if (sk->dit_tan[0]) sk->dit_tan[0](s, 32, 1, sk->nblocks, bs, sk->s, sk->twt);
             else sk->dit_tw[0](s, 32, 1, sk->nblocks, bs, sk->s, sk->tw);
         }
-        ahn_dit_r4_rows(rp, rpp, s, C, s0->tw);
+        PROF_MARK(t, PR_P2_INV);
+        if (s0->twt) ahn_dit_r4_rows_tan(rp, rpp, s, C, s0->twt);
+        else ahn_dit_r4_rows(rp, rpp, s, C, s0->tw);
+        PROF_MARK(t, PR_P2_OUT);
     }
 }
 

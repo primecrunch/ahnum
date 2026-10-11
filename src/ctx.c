@@ -33,13 +33,14 @@ double ahn_safe_bpw(uint32_t L, uint64_t k) {
 }
 
 // Measured squaring times (us) per FFT length, loaded from a tuning file with
-// lines "L us" (see `ahbench tune`). Path: $AHN_FFT_TIMES, else
-// ~/.ahnum/fft_times.txt.
+// lines "L us [order]" (see `ahbench tune`; order as ahn_opts.plan_order bits,
+// 0 if absent). Path: $AHN_FFT_TIMES, else ~/.ahnum/fft_times.txt.
 static struct {
     int loaded;
     uint32_t n;
     uint32_t *L;
     double *us;
+    uint8_t *ord;
 } g_times;
 
 static void load_times(void) {
@@ -55,18 +56,32 @@ static void load_times(void) {
     }
     FILE *f = fopen(p, "r");
     if (!f) return;
-    uint32_t cap = 0, L;
+    uint32_t cap = 0, L, ord;
     double us;
-    while (fscanf(f, "%u %lf", &L, &us) == 2) {
+    char line[256];
+    while (fgets(line, sizeof line, f)) {
+        int got = sscanf(line, "%u %lf %u", &L, &us, &ord);
+        if (got < 2) continue;
+        if (got < 3 || ord > 3) ord = 0;
         if (g_times.n == cap) {
             cap = cap ? 2 * cap : 256;
             g_times.L = realloc(g_times.L, cap * sizeof(uint32_t));
             g_times.us = realloc(g_times.us, cap * sizeof(double));
+            g_times.ord = realloc(g_times.ord, cap);
         }
         g_times.L[g_times.n] = L;
+        g_times.ord[g_times.n] = (uint8_t)ord;
         g_times.us[g_times.n++] = us;
     }
     fclose(f);
+}
+
+uint32_t ahn_tuned_plan_order(uint32_t L) {
+    load_times();
+    for (uint32_t i = 0; i < g_times.n; i++) {
+        if (g_times.L[i] == L) return g_times.ord[i];
+    }
+    return 0;
 }
 
 static double measured_us(uint32_t L) {
@@ -215,6 +230,7 @@ ahn_ctx *ahn_ctx_new(uint64_t k, uint64_t n, int32_t c, const ahn_opts *o) {
     ctx->c = c;
     ctx->L = o && o->fft_len ? o->fft_len : ahn_choose_fft_len(k, n);
     ctx->threads = o && o->threads ? o->threads : 1;
+    ctx->plan_order = o && o->plan_order ? (o->plan_order - 1) & 3 : ahn_tuned_plan_order(ctx->L);
     ctx->err_every = 1;
     if (!ahn_fft_len_ok(ctx->L) || ctx->L > n) goto fail;
 

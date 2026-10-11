@@ -34,6 +34,7 @@ struct ahn_ctx {
     int32_t c;
     uint32_t L;           // FFT length in real words
     uint32_t threads;
+    uint32_t plan_order;  // bit 0: column radices ascending, bit 1: row radices ascending
     uint8_t *bits;        // bits[j] = s_{j+1} - s_j
     uint64_t lam;         // log2(k) as a 64-bit binary fraction (T' = n + lam/2^64)
     uint64_t sL;          // s_L
@@ -77,11 +78,16 @@ void ahn_carry_digits(const ahn_ctx *ctx, int64_t *dig);
 // Choose an FFT length for (k, n).
 uint32_t ahn_choose_fft_len(uint64_t k, uint64_t n);
 uint32_t ahn_next_fft_len(uint32_t L);
+uint32_t ahn_tuned_plan_order(uint32_t L);
 double ahn_safe_bpw(uint32_t L, uint64_t k);
 // Layout helpers shared by the backends (exact rational arithmetic in T').
 uint64_t ahn_s_at(const ahn_ctx *ctx, uint64_t j);
 double ahn_weight(const ahn_ctx *ctx, uint64_t j, uint64_t sj);
 bool ahn_fft_len_ok(uint32_t L);
+// Tangent-form DIT twiddles for a radix-p stage of block size p*s (p in 2, 3, 4,
+// 8): writes s records of ahn_tan_nscal(p) doubles; returns 0, or -1 for other p.
+int ahn_tan_table(uint32_t p, uint32_t s, double *out);
+uint32_t ahn_tan_nscal(uint32_t p);
 
 void *ahn_alloc(size_t bytes);
 void ahn_free_aligned(void *p);

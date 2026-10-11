@@ -30,7 +30,8 @@ build/ahbench tune 8192 196608 --out ~/.ahnum/fft_times.txt # measure FFT length
 RES64 is the low 64 bits of 3^(N−1) mod N in upper-case hex (primecrunch convention). A PRP has
 RES64 `0000000000000001`. `--expect` makes the exit status reflect the comparison.
 
-Options: `--threads T`, `--fft L` (force a length), `--backend neon|c2p|ref`, `--base B`,
+Options: `--threads T`, `--fft L` (force a length), `--order 0..3` (force an FFT stage order),
+`--backend neon|c2p|ref`, `--base B`,
 `--ckpt FILE` / `--ckpt-secs S` (checkpoint/resume), `--block B` (Gerbicz block),
 `--fault ITER` (inject a digit error to exercise the Gerbicz check).
 
@@ -90,16 +91,23 @@ Stages are radix 2/3/4/5/7/8, so lengths are 2^a·3^b·5^c·7^d·64.
 
 **Kernels** (`gen/gen_kernels.py` → `build/asm/*.S`):
 - DIF/DIT stage kernels per radix, with by-element twiddle FMAs and four-step-twiddle variants.
-- Normalisers: compressed-weight and table-driven variants. The 4-row version interleaves two
-  carry chains to hide FP latency.
+  DIT stages of radix 2/3/4/8 use a tangent form, w = c(1 + iτ): two FMAs per twiddle, with
+  c folded into the butterfly's own FMAs (`AHN_NO_TAN=1` selects the plain complex multiply).
+- Normalisers: compressed-weight and table-driven variants. The table variants work each digit
+  in place from a {osc, 1/base, base·w} record, and the 8-row version keeps four carry chains
+  in flight to hide FP latency.
 - Row transposes and the real-split kernel.
 
-At 4.49 GHz all of them run at about 4 FP instructions per cycle, the limit of the 4 NEON pipes.
+At 4.49 GHz all of them run at about 4 FP instructions per cycle in isolation, the limit of the
+4 NEON pipes. In the full squaring the passes that load from L2 run lower; `AHN_PROF=1` prints a
+per-phase time split, and `tools/count_ops.py build/asm` counts each kernel's instructions.
 
 **FFT length** comes from a fitted round-off model. Measured: bpw_max ≈ 21.44 −
 0.305·(log2 L − 12) − 0.525·log2 k, less a 0.45 margin. Among the safe lengths, the fastest is
 taken from `~/.ahnum/fft_times.txt` (or `$AHN_FFT_TIMES`); without that file a heuristic is
-used. `tune/fft_times_m4pro.txt` holds measurements for this machine.
+used. Each line is "L us order": `ahbench tune` times the four stage orders (column and row
+radices in the default order or ascending) and records the fastest, since which is faster
+depends on the length. `tune/fft_times_m4pro.txt` holds measurements for this machine.
 
 **Error checking** (`src/prp.c`):
 - A Gerbicz check every B·M squarings (B ≈ √n, M ≈ B/4), with rollback to the last verified
@@ -117,9 +125,11 @@ and fixes it up with the previous range's carries.
 
 | number | FFT | config | time/squaring | per test |
 |---|---|---|---|---|
-| 9357·2^369717−1 | 28672 | 1 thread | 69 µs | 26 s |
-| 9357·2^369717−1 | 28672 | 10 tests × 1 thread | 86 µs each | 1125 tests/hour |
-| 9357·2^369717−1 | 28672 | 14 tests × 1 thread (P+E) | 110 µs each | 1244 tests/hour |
+| 9357·2^369717−1 | 26880 | 1 thread | 64.3 µs | 24 s |
+| 9001·2^662695−1 | 49152 | 1 thread | 113 µs | 74.6 s |
+| 9001·2^662695−1 | 49152 | 10 tests × 1 thread | — | 371 tests/hour (97 s each) |
+| 9357·2^369717−1 | 28672 | 10 tests × 1 thread (earlier build) | 86 µs each | 1125 tests/hour |
+| 9357·2^369717−1 | 28672 | 14 tests × 1 thread, P+E (earlier build) | 110 µs each | 1244 tests/hour |
 | 69·2^24612729−1 | 1638400 | 1 thread | 6.5 ms | 45 h |
 | 69·2^24612729−1 | 1638400 | 10 threads | 0.77 ms | 5.3 h |
 

@@ -225,6 +225,130 @@ class Fft:
         store(0, x0)
 
 
+# ---- tangent-form DIT stages ------------------------------------------------
+#
+# Input t of a DIT butterfly is multiplied by conj(w_t) = c_t (1 + i tau_t),
+# c_t = cos(theta_t), tau_t = tan(theta_t). x (1 + i tau) costs two FMAs (the
+# register copies are eliminated at rename), and each c_t is carried as a known
+# scale on the value until a butterfly folds it into its own FMAs: (a, b) with
+# scales (sa, sb) gives a +- (sb/sa) b with scale sa. The scalar order per j
+# below matches ahn_tan_table (src/neon.c); an exact cos = 0 is stored as
+# c = 2^-60 (the stray c * x term is far below rounding).
+TAN_NSCAL = {2: 2, 3: 6, 4: 6, 8: 16}
+
+
+def tan_mul(f, x, tau):
+    """x * (1 + i tau): returns the new value (x's real register is freed)."""
+    y0 = f.R.get()
+    f.e("mov v%d.16b, v%d.16b" % (y0, x[0]))
+    f.e("fmls v%d.2d, v%d.2d, %s" % (y0, x[1], tau))
+    f.e("fmla v%d.2d, v%d.2d, %s" % (x[1], x[0], tau))
+    f.R.put(x[0])
+    return (y0, x[1])
+
+
+def bfly_s(f, a, b, rho):
+    """(a + rho b, a - rho b); sum in a's registers."""
+    t = f.R.cx()
+    for k in range(2):
+        f.e("mov v%d.16b, v%d.16b" % (t[k], a[k]))
+        f.e("fmls v%d.2d, v%d.2d, %s" % (t[k], b[k], rho))
+        f.e("fmla v%d.2d, v%d.2d, %s" % (a[k], b[k], rho))
+    f.R.putcx(b)
+    return a, t
+
+
+def bfly_j_s(f, a, b, rho):
+    """(a + J rho b, a - J rho b), J = +i (inverse transforms only)."""
+    assert f.sign > 0
+    t = f.R.cx()
+    # a + i b = (ar - bi, ai + br); a - i b = (ar + bi, ai - br)
+    f.e("mov v%d.16b, v%d.16b" % (t[0], a[0]))
+    f.e("fmla v%d.2d, v%d.2d, %s" % (t[0], b[1], rho))
+    f.e("mov v%d.16b, v%d.16b" % (t[1], a[1]))
+    f.e("fmls v%d.2d, v%d.2d, %s" % (t[1], b[0], rho))
+    f.e("fmls v%d.2d, v%d.2d, %s" % (a[0], b[1], rho))
+    f.e("fmla v%d.2d, v%d.2d, %s" % (a[1], b[0], rho))
+    f.R.putcx(b)
+    return a, t
+
+
+def w8_ns(f, b, power):
+    """Inverse W8^power without the sqrt(1/2) factor (the caller's scale holds
+    it): power 1: b (1 + i), scale +c; power 3: b (1 - i), scale -c."""
+    t = f.R.cx()
+    br, bi = v(b[0]), v(b[1])
+    if power == 1:  # (br - bi, br + bi)
+        f.e("fsub %s, %s, %s" % (v(t[0]), br, bi))
+        f.e("fadd %s, %s, %s" % (v(t[1]), br, bi))
+    else:  # (br + bi, bi - br)
+        f.e("fadd %s, %s, %s" % (v(t[0]), br, bi))
+        f.e("fsub %s, %s, %s" % (v(t[1]), bi, br))
+    f.R.putcx(b)
+    return t
+
+
+def dft_tan(f, x, p, S, store):
+    """Inverse DFT of x (inputs already tangent-multiplied, scales c_t pending)
+    using scalar refs S (list in TAN_NSCAL order); outputs have unit scale and
+    go to store(t, value)."""
+    if p == 2:
+        a, b = bfly_s(f, x[0], x[1], S[1])
+        store(0, a)
+        store(1, b)
+    elif p == 4:
+        # S: tau1 tau2 tau3 | c2, c3/c1, c1
+        s0, d0 = bfly_s(f, x[0], x[2], S[3])
+        s1, d1 = bfly_s(f, x[1], x[3], S[4])
+        X0, X2 = bfly_s(f, s0, s1, S[5])
+        X1, X3 = bfly_j_s(f, d0, d1, S[5])
+        for t, y in enumerate((X0, X1, X2, X3)):
+            store(t, y)
+    elif p == 8:
+        # S: tau1..tau7 | c4, c5/c1, c6/c2, c7/c3, c2, c3/c1, -c3/c1, c1, c1*sqrt(1/2)
+        a0, b0 = bfly_s(f, x[0], x[4], S[7])
+        a1, b1 = bfly_s(f, x[1], x[5], S[8])   # scale c1
+        a2, b2 = bfly_s(f, x[2], x[6], S[9])   # scale c2
+        a3, b3 = bfly_s(f, x[3], x[7], S[10])  # scale c3
+        b1 = w8_ns(f, b1, 1)                   # scale c1 c
+        b3 = w8_ns(f, b3, 3)                   # scale -c3 c
+        s0, d0 = bfly_s(f, a0, a2, S[11])
+        s1, d1 = bfly_s(f, a1, a3, S[12])      # scale c1
+        X0, X4 = bfly_s(f, s0, s1, S[14])
+        X2, X6 = bfly_j_s(f, d0, d1, S[14])
+        sb0, db0 = bfly_j_s(f, b0, b2, S[11])
+        sb1, db1 = bfly_s(f, b1, b3, S[13])    # scale c1 c
+        X1, X5 = bfly_s(f, sb0, sb1, S[15])
+        X3, X7 = bfly_j_s(f, db0, db1, S[15])
+        for t, y in enumerate((X0, X1, X2, X3, X4, X5, X6, X7)):
+            store(t, y)
+    elif p == 3:
+        # S: tau1 tau2 | c2/c1, c1 cos(2pi/3), c1 sin(2pi/3), c1
+        S1, D1 = bfly_s(f, x[1], x[2], S[2])   # scale c1
+        x0 = x[0]
+        A, B = f.R.cx(), f.R.cx()
+        for k in range(2):
+            f.e("mov v%d.16b, v%d.16b" % (A[k], x0[k]))
+            f.e("fmla v%d.2d, v%d.2d, %s" % (A[k], S1[k], S[3]))
+        for k in range(2):
+            f.e("fmul v%d.2d, v%d.2d, %s" % (B[k], D1[k], S[4]))
+        Y1 = f.R.cx()
+        f.e("fadd %s, %s, %s" % (v(Y1[0]), v(A[0]), v(B[1])))
+        f.e("fsub %s, %s, %s" % (v(Y1[1]), v(A[1]), v(B[0])))
+        f.e("fsub %s, %s, %s" % (v(A[0]), v(A[0]), v(B[1])))
+        f.e("fadd %s, %s, %s" % (v(A[1]), v(A[1]), v(B[0])))
+        f.R.putcx(B)
+        f.R.putcx(D1)
+        store(1, A)
+        store(2, Y1)
+        for k in range(2):
+            f.e("fmla v%d.2d, v%d.2d, %s" % (x0[k], S1[k], S[5]))
+        f.R.putcx(S1)
+        store(0, x0)
+    else:
+        raise ValueError(p)
+
+
 def cmul_tw(f, y, treg, conj):
     """y *= (packed scalar twiddle in treg) or its conjugate; returns new value."""
     t = f.R.cx()
@@ -310,8 +434,9 @@ def stc(g, c, addr, layout):
 
 
 def gen_stage(g, p, direction, mode, layout="a"):
-    """direction 'dif' or 'dit'; mode 'tw', 'notw' or 't4'; layout 'a' or 'b'
-    (layout 'b' kernels carry the suffix _b)."""
+    """direction 'dif' or 'dit'; mode 'tw', 'notw', 't4' or 'tan' (DIT with a
+    tangent-form table, p in TAN_NSCAL); layout 'a' or 'b' (layout 'b' kernels
+    carry the suffix _b)."""
     name = "%s%s_r%d%s%s" % (PREFIX, direction, p, "" if mode == "tw" else "_" + mode,
                              "" if layout == "a" else "_b")
     sign = -1 if direction == "dif" else 1
@@ -332,7 +457,9 @@ def gen_stage(g, p, direction, mode, layout="a"):
 
     nconst = 0
     cname = None
-    if p == 8:
+    if mode == "tan":
+        pass  # all constants are folded into the per-j scalars
+    elif p == 8:
         nconst = 1
         cname = "Lc8_%s_%s_%s" % (direction, mode, layout)
         c = math.sqrt(0.5)
@@ -347,7 +474,7 @@ def gen_stage(g, p, direction, mode, layout="a"):
         cname = "Lcp%d_%s_%s_%s" % (p, direction, mode, layout)
         const_table(g, cname, vals)
     # register budget: twiddles at the top, constants below them
-    ntw = p - 1 if mode == "tw" else 0
+    ntw = p - 1 if mode == "tw" else (TAN_NSCAL[p] + 1) // 2 if mode == "tan" else 0
     allregs = list(range(32))
     twregs = allregs[32 - ntw:]
     cregs = allregs[32 - ntw - nconst:32 - ntw]
@@ -364,7 +491,7 @@ def gen_stage(g, p, direction, mode, layout="a"):
     g.emit("mov x10, x6")  # twiddle pointer
     g.emit("mov x11, x5")  # j counter
     g.label("2")  # j loop
-    if mode == "tw":
+    if mode in ("tw", "tan"):
         for t in range(ntw):
             g.emit("ldr q%d, [x10], #16" % twregs[t])
     g.emit("mov x12, x9")  # lane-group pointer
@@ -380,6 +507,8 @@ def gen_stage(g, p, direction, mode, layout="a"):
         ldc(g, c, "x14", layout)
         if direction == "dit" and t > 0 and mode == "tw":
             c = cmul_tw(f, c, twregs[t - 1], conj=True)
+        if mode == "tan" and t > 0:
+            c = tan_mul(f, c, "v%d.d[%d]" % (twregs[(t - 1) // 2], (t - 1) % 2))
         if direction == "dit" and mode == "t4":
             w = R.cx()
             g.emit("add x15, x14, x6")
@@ -399,7 +528,11 @@ def gen_stage(g, p, direction, mode, layout="a"):
         stc(g, y, "x14", layout)
         R.putcx(y)
 
-    if p == 2:
+    if mode == "tan":
+        ys = None
+        S = ["v%d.d[%d]" % (twregs[i // 2], i % 2) for i in range(TAN_NSCAL[p])]
+        dft_tan(f, x, p, S, store)
+    elif p == 2:
         ys = f.dft2(x)
     elif p == 4:
         ys = f.dft4(x)
@@ -425,10 +558,11 @@ def gen_stage(g, p, direction, mode, layout="a"):
     g.emit("ret")
 
 
-def gen_norm(g, mode, table, err):
-    """Pass-1 normalisation for one group, one row pair per iteration.
+def gen_norm(g, mode, err):
+    """Pass-1 normalisation for one group with compressed weights, one row pair
+    per iteration (the table-driven variants are gen_norm_tab).
 
-    double ahn_norm_{a,b,c}[t][e](double *gbase, size_t rowstride, size_t npairs,
+    double ahn_norm_{a,b,c}[e](double *gbase, size_t rowstride, size_t npairs,
                                   double *carry, const double *A, const double *IA,
                                   const uint64_t *mask, const double *consts)
     gbase points at the first row of the group: one 8-column block (layout b,
@@ -439,37 +573,32 @@ def gen_norm(g, mode, table, err):
       b: same but stores x (unweighted digit)
       c: input d is a digit; x = d + carry; digits 0..14 carry as above, digit
          15 absorbs; d = x * w
-    Compressed weights (table = False): osc = IA*IBs[i]*2^e, w = A*B[i]*2^-e,
-      base = 2^(b+big); mask bit i: e flag, bit 16+i: big digit.
+    Weights: osc = IA*IBs[i]*2^e, w = A*B[i]*2^-e, base = 2^(b+big); mask
+      bit i: e flag, bit 16+i: big digit.
       consts: B[16], IBs[16], {2^b,2^b}, {2^-b,2^-b}, {1<<52,1<<52}.
-    Table weights (table = True, suffix t): A points at 16 records per row pair
-      of {osc[2], w[2], 1/base[2], base[2]} (64 bytes); IA, mask, consts unused.
     err (suffix e): track and return the max rounding error, else return 0.
     """
-    name = "%snorm_%s%s%s" % (PREFIX, mode, "t" if table else "", "e" if err else "")
+    name = "%snorm_%s%s" % (PREFIX, mode, "e" if err else "")
     g.out.append("")
     g.out.append(".globl %s" % name)
     g.out.append(".p2align 5")
     g.label(name)
     g.out.append(SAVE)
     E = g.emit
-    if not table:
-        E("ldr q30, [x7, #256]")  # base0
-        E("ldr q29, [x7, #272]")  # ibase0
-        E("ldr q31, [x7, #288]")  # K52
+    E("ldr q30, [x7, #256]")  # base0
+    E("ldr q29, [x7, #272]")  # ibase0
+    E("ldr q31, [x7, #288]")  # K52
     E("movi v28.2d, #0")      # max error
     E("add x9, x0, x1")       # second row pointer
     E("lsl x1, x1, #1")       # advance two rows per iteration
     g.label("1")
-    if not table:
-        E("ldr q27, [x4], #16")   # A
-        E("ldr q26, [x5], #16")   # IA
-        E("ldr q25, [x6], #16")   # masks
+    E("ldr q27, [x4], #16")   # A
+    E("ldr q26, [x5], #16")   # IA
+    E("ldr q25, [x6], #16")   # masks
     E("ldr q24, [x3]")        # carry in
     for lg in range(4):
-        if not table:
-            E("ldp q20, q21, [x7, #%d]" % (32 * lg))        # B[4lg .. 4lg+3]
-            E("ldp q22, q23, [x7, #%d]" % (128 + 32 * lg))  # IBs
+        E("ldp q20, q21, [x7, #%d]" % (32 * lg))        # B[4lg .. 4lg+3]
+        E("ldp q22, q23, [x7, #%d]" % (128 + 32 * lg))  # IBs
         E("ldr q0, [x0, #%d]" % (16 * lg))       # row r: re (layout b)
         E("ldr q1, [x0, #%d]" % (64 + 16 * lg))  #        im
         E("ldr q2, [x9, #%d]" % (16 * lg))       # row r+1
@@ -482,26 +611,21 @@ def gen_norm(g, mode, table, err):
             i = 4 * lg + k
             D = "v%d.2d" % (4 + k)
             last = mode == "c" and i == 15
-            if table:
-                # v10 osc, v17 w, v14 1/base, v15 base
-                E("ldp q10, q17, [x4], #32")
-                E("ldp q14, q15, [x4], #32")
-            else:
-                breg = "v%d.d[%d]" % (20 + k // 2, k % 2)
-                ibreg = "v%d.d[%d]" % (22 + k // 2, k % 2)
-                E("shl v8.2d, v25.2d, #%d" % (52 - i))
-                E("and v8.16b, v8.16b, v31.16b")      # te
-                if not last:
-                    E("shl v9.2d, v25.2d, #%d" % (36 - i))
-                    E("and v9.16b, v9.16b, v31.16b")  # tb
-                    E("sub v14.2d, v29.2d, v9.2d")    # 1/base
-                    E("add v15.2d, v30.2d, v9.2d")    # base
-                if mode != "c":
-                    E("fmul v10.2d, v26.2d, %s" % ibreg)
-                    E("add v10.2d, v10.2d, v8.2d")    # osc
-                if mode != "b":
-                    E("fmul v17.2d, v27.2d, %s" % breg)
-                    E("sub v17.2d, v17.2d, v8.2d")    # w
+            breg = "v%d.d[%d]" % (20 + k // 2, k % 2)
+            ibreg = "v%d.d[%d]" % (22 + k // 2, k % 2)
+            E("shl v8.2d, v25.2d, #%d" % (52 - i))
+            E("and v8.16b, v8.16b, v31.16b")      # te
+            if not last:
+                E("shl v9.2d, v25.2d, #%d" % (36 - i))
+                E("and v9.16b, v9.16b, v31.16b")  # tb
+                E("sub v14.2d, v29.2d, v9.2d")    # 1/base
+                E("add v15.2d, v30.2d, v9.2d")    # base
+            if mode != "c":
+                E("fmul v10.2d, v26.2d, %s" % ibreg)
+                E("add v10.2d, v10.2d, v8.2d")    # osc
+            if mode != "b":
+                E("fmul v17.2d, v27.2d, %s" % breg)
+                E("sub v17.2d, v17.2d, v8.2d")    # w
             if mode == "c":
                 E("fadd v12.2d, %s, v24.2d" % D)
             else:
@@ -539,41 +663,62 @@ def gen_norm(g, mode, table, err):
     E("ret")
 
 
-def gen_norm_quad(g, mode, err):
-    """Table-driven normalisation, two row pairs (4 rows) per iteration with
-    interleaved carry chains. Same ABI as ahn_norm_*t*; npairs must be even.
-    Name: ahn_norm_{a,b,c}q[e]. Carry chain per digit: c' = rint(x/base + c/base)
-    computed as one FMA + round."""
-    name = "%snorm_%sq%s" % (PREFIX, mode, "e" if err else "")
+def gen_norm_tab(g, mode, err, P):
+    """Table-driven normalisation, P row pairs (2P rows) per iteration, each pair
+    its own carry chain. Same ABI as ahn_norm_*; npairs must be a multiple of P.
+    Name: ahn_norm_{a,b,c}{t,q,o}[e] for P = 1, 2, 4.
+
+    A points at 16 records per row pair of {osc[2], ib[2], bw[2]} (48 bytes;
+    768 bytes per pair), ib = 1/base, bw = base * w. Each digit is worked in
+    place in its register:
+      a: D = rint(D * osc) * ib; D += cin * ib; cin = rint(D); D = (D - cin) * bw
+      b: as a, but stores the scaled digit D - cin (= digit / base)
+      c: input is a scaled digit; D += cin * ib; cin = rint(D); D = (D - cin) * bw,
+         except digit 15, which absorbs: D = (D + cin * ib) * bw
+    Every step is exact up to the final multiply (power-of-two scalings of
+    integers below 2^53), so the output equals the old x * w form bit for bit.
+    With only D and cin live per chain, P = 4 fits: 16 digit + 4 carry
+    registers, staging and table registers reused through renaming."""
+    sfx = {1: "t", 2: "q", 4: "o"}[P]
+    name = "%snorm_%s%s%s" % (PREFIX, mode, sfx, "e" if err else "")
     g.out.append("")
     g.out.append(".globl %s" % name)
     g.out.append(".p2align 5")
     g.label(name)
     g.out.append(SAVE)
     E = g.emit
-    E("movi v30.2d, #0")       # max error
-    E("add x9, x0, x1")        # row r+1
-    E("add x10, x9, x1")       # row r+2
-    E("add x11, x10, x1")      # row r+3
-    E("lsl x1, x1, #2")        # advance four rows
-    E("lsr x2, x2, #1")        # quads
-    E("add x12, x4, #1024")    # table for the second row pair
+    rowregs = ["x0", "x9", "x10", "x11", "x12", "x13", "x14", "x15"][:2 * P]
+    E("movi v28.2d, #0")  # max error
+    for i in range(1, 2 * P):
+        E("add %s, %s, x1" % (rowregs[i], rowregs[i - 1]))
+    E("lsl x1, x1, #%d" % {1: 1, 2: 2, 4: 3}[P])  # advance 2P rows
+    if P > 1:
+        E("lsr x2, x2, #%d" % {2: 1, 4: 2}[P])
+    # one table pointer per pair keeps ldp offsets in range (IA, mask, consts
+    # are unused here, so x5..x7 are free)
+    tabregs = ["x4", "x5", "x6", "x7"][:P]
+    for p in range(1, P):
+        E("add %s, x4, #%d" % (tabregs[p], 768 * p))
+    cins = [16 + p for p in range(P)]
+    STG = (20, 21, 22, 23)
+    OSC, IB, BW, T, EV = 24, 25, 26, 27, 29
     g.label("1")
-    E("ldp q24, q25, [x3]")    # carries P (rows r, r+1), Q (rows r+2, r+3)
-    pairs = [
-        dict(rows=("x0", "x9"), ld=(0, 1, 2, 3), dig=(4, 5, 6, 7), tab=(8, 9, 10, 11),
-             tp="x4", cin=24, t1=26, t2=27),
-        dict(rows=("x10", "x11"), ld=(16, 17, 18, 19), dig=(20, 21, 22, 23),
-             tab=(12, 13, 14, 15), tp="x12", cin=25, t1=28, t2=29),
-    ]
+    if P == 1:
+        E("ldr q16, [x3]")
+    elif P == 2:
+        E("ldp q16, q17, [x3]")
+    else:
+        E("ldp q16, q17, [x3]")
+        E("ldp q18, q19, [x3, #32]")
     for lg in range(4):
-        for P in pairs:
-            a, b, c, d = P["ld"]
-            E("ldr q%d, [%s, #%d]" % (a, P["rows"][0], 16 * lg))
-            E("ldr q%d, [%s, #%d]" % (b, P["rows"][0], 64 + 16 * lg))
-            E("ldr q%d, [%s, #%d]" % (c, P["rows"][1], 16 * lg))
-            E("ldr q%d, [%s, #%d]" % (d, P["rows"][1], 64 + 16 * lg))
-            D = P["dig"]
+        for p in range(P):
+            r0, r1 = rowregs[2 * p], rowregs[2 * p + 1]
+            a, b, c, d = STG
+            E("ldr q%d, [%s, #%d]" % (a, r0, 16 * lg))
+            E("ldr q%d, [%s, #%d]" % (b, r0, 64 + 16 * lg))
+            E("ldr q%d, [%s, #%d]" % (c, r1, 16 * lg))
+            E("ldr q%d, [%s, #%d]" % (d, r1, 64 + 16 * lg))
+            D = [4 * p + k for k in range(4)]
             E("trn1 v%d.2d, v%d.2d, v%d.2d" % (D[0], a, c))
             E("trn1 v%d.2d, v%d.2d, v%d.2d" % (D[1], b, d))
             E("trn2 v%d.2d, v%d.2d, v%d.2d" % (D[2], a, c))
@@ -581,52 +726,59 @@ def gen_norm_quad(g, mode, err):
         for k in range(4):
             i = 4 * lg + k
             last = mode == "c" and i == 15
-            for P in pairs:
-                osc, w, ib, base = P["tab"]
-                Dk = P["dig"][k]
-                cin, t1, t2 = P["cin"], P["t1"], P["t2"]
-                E("ldp q%d, q%d, [%s], #32" % (osc, w, P["tp"]))
-                E("ldp q%d, q%d, [%s], #32" % (ib, base, P["tp"]))
-                if mode == "c":
-                    E("mov v%d.16b, v%d.16b" % (t1, Dk))
+            for p in range(P):
+                Dk, cin = 4 * p + k, cins[p]
+                tp, off = tabregs[p], i * 48
+                if mode != "c":
+                    E("ldp q%d, q%d, [%s, #%d]" % (OSC, IB, tp, off))
                 else:
-                    E("fmul v%d.2d, v%d.2d, v%d.2d" % (Dk, Dk, osc))
-                    E("frintn v%d.2d, v%d.2d" % (t1, Dk))
+                    E("ldr q%d, [%s, #%d]" % (IB, tp, off + 16))
+                if mode != "b":
+                    E("ldr q%d, [%s, #%d]" % (BW, tp, off + 32))
+                if mode != "c":
+                    E("fmul v%d.2d, v%d.2d, v%d.2d" % (Dk, Dk, OSC))
                     if err:
-                        E("fabd v31.2d, v%d.2d, v%d.2d" % (Dk, t1))
-                        E("fmax v30.2d, v30.2d, v31.2d")
+                        E("frintn v%d.2d, v%d.2d" % (T, Dk))
+                        E("fabd v%d.2d, v%d.2d, v%d.2d" % (EV, Dk, T))
+                        E("fmax v28.2d, v28.2d, v%d.2d" % EV)
+                        E("fmul v%d.2d, v%d.2d, v%d.2d" % (Dk, T, IB))
+                    else:
+                        E("frintn v%d.2d, v%d.2d" % (Dk, Dk))
+                        E("fmul v%d.2d, v%d.2d, v%d.2d" % (Dk, Dk, IB))
+                E("fmla v%d.2d, v%d.2d, v%d.2d" % (Dk, cin, IB))
                 if last:
-                    E("fadd v%d.2d, v%d.2d, v%d.2d" % (t1, t1, cin))
                     E("movi v%d.2d, #0" % cin)
                 else:
-                    E("fmul v%d.2d, v%d.2d, v%d.2d" % (t2, t1, ib))
-                    E("fmla v%d.2d, v%d.2d, v%d.2d" % (t2, cin, ib))
-                    E("fadd v%d.2d, v%d.2d, v%d.2d" % (t1, t1, cin))
-                    E("frintn v%d.2d, v%d.2d" % (cin, t2))
-                    E("fmls v%d.2d, v%d.2d, v%d.2d" % (t1, cin, base))
-                if mode == "b":
-                    E("mov v%d.16b, v%d.16b" % (Dk, t1))
-                else:
-                    E("fmul v%d.2d, v%d.2d, v%d.2d" % (Dk, t1, w))
-        for P in pairs:
-            a, b, c, d = P["ld"]
-            D = P["dig"]
+                    E("frintn v%d.2d, v%d.2d" % (cin, Dk))
+                    E("fsub v%d.2d, v%d.2d, v%d.2d" % (Dk, Dk, cin))
+                if mode != "b":
+                    E("fmul v%d.2d, v%d.2d, v%d.2d" % (Dk, Dk, BW))
+        for p in range(P):
+            r0, r1 = rowregs[2 * p], rowregs[2 * p + 1]
+            a, b, c, d = STG
+            D = [4 * p + k for k in range(4)]
             E("trn1 v%d.2d, v%d.2d, v%d.2d" % (a, D[0], D[2]))
             E("trn1 v%d.2d, v%d.2d, v%d.2d" % (b, D[1], D[3]))
             E("trn2 v%d.2d, v%d.2d, v%d.2d" % (c, D[0], D[2]))
             E("trn2 v%d.2d, v%d.2d, v%d.2d" % (d, D[1], D[3]))
-            E("str q%d, [%s, #%d]" % (a, P["rows"][0], 16 * lg))
-            E("str q%d, [%s, #%d]" % (b, P["rows"][0], 64 + 16 * lg))
-            E("str q%d, [%s, #%d]" % (c, P["rows"][1], 16 * lg))
-            E("str q%d, [%s, #%d]" % (d, P["rows"][1], 64 + 16 * lg))
-    E("stp q24, q25, [x3], #32")
-    E("add x4, x4, #1024")
-    E("add x12, x12, #1024")
-    for r in ("x0", "x9", "x10", "x11"):
+            E("str q%d, [%s, #%d]" % (a, r0, 16 * lg))
+            E("str q%d, [%s, #%d]" % (b, r0, 64 + 16 * lg))
+            E("str q%d, [%s, #%d]" % (c, r1, 16 * lg))
+            E("str q%d, [%s, #%d]" % (d, r1, 64 + 16 * lg))
+    if P == 1:
+        E("str q16, [x3], #16")
+    elif P == 2:
+        E("stp q16, q17, [x3], #32")
+    else:
+        E("stp q16, q17, [x3], #32")
+        E("stp q18, q19, [x3], #32")
+    for tp in tabregs:
+        E("add %s, %s, #%d" % (tp, tp, 768 * P))
+    for r in rowregs:
         E("add %s, %s, x1" % (r, r))
     E("subs x2, x2, #1")
     E("b.ne 1b")
-    E("fmaxp d0, v30.2d")
+    E("fmaxp d0, v28.2d")
     g.out.append(RESTORE)
     E("ret")
 
@@ -687,7 +839,7 @@ def gen_rows(g):
     E("ret")
 
 
-def gen_rows_stage(g, direction):
+def gen_rows_stage(g, direction, tan=False):
     """First row-FFT stage fused with the row-pair transpose (pass 2).
 
     void ahn_dif_r4_rows(const double *rp, const double *rpp, double *scr, size_t C,
@@ -702,9 +854,12 @@ def gen_rows_stage(g, direction):
     tw: the stage's twiddle table (3 packed complex per j). Butterflies j and
     j+1 are processed together, so one 16-byte row load covers both columns.
     C must be a multiple of 8.
+    tan (DIT only, suffix _tan): tw is the tangent-form table (ahn_tan_table,
+    6 scalars per j), as in the 'tan' stage kernels.
     """
     E = g.emit
-    name = "%s%s_r4_rows" % (PREFIX, direction)
+    assert not (tan and direction == "dif")
+    name = "%s%s_r4_rows%s" % (PREFIX, direction, "_tan" if tan else "")
     fwd = direction == "dif"
     g.out.append("")
     g.out.append(".globl %s" % name)
@@ -750,13 +905,23 @@ def gen_rows_stage(g, direction):
             E("add x15, x2, x%d" % (19 + t))
             E("ldp q%d, q%d, [x15]" % (a[0], a[1]))
             E("ldp q%d, q%d, [x15, #32]" % (b[0], b[1]))
-            if t > 0:
+            if t > 0 and tan:
+                a = tan_mul(f, a, "v%d.d[%d]" % (twregs[(t - 1) // 2], (t - 1) % 2))
+                b = tan_mul(f, b, "v%d.d[%d]" % (twregs[3 + (t - 1) // 2], (t - 1) % 2))
+            elif t > 0:
                 a = cmul_tw(f, a, twregs[t - 1], conj=True)
                 b = cmul_tw(f, b, twregs[3 + t - 1], conj=True)
         A.append(a)
         B.append(b)
-    ya = f.dft4(A)
-    yb = f.dft4(B)
+    if tan:
+        ya, yb = [None] * 4, [None] * 4
+        Sa = ["v%d.d[%d]" % (twregs[i // 2], i % 2) for i in range(6)]
+        Sb = ["v%d.d[%d]" % (twregs[3 + i // 2], i % 2) for i in range(6)]
+        dft_tan(f, A, 4, Sa, lambda t, y: ya.__setitem__(t, y))
+        dft_tan(f, B, 4, Sb, lambda t, y: yb.__setitem__(t, y))
+    else:
+        ya = f.dft4(A)
+        yb = f.dft4(B)
     for t in range(4):
         a, b = ya[t], yb[t]
         if fwd:
@@ -1040,20 +1205,23 @@ def main():
             for mode in ("tw", "notw", "t4"):
                 for layout in ("a", "b"):
                     gen_stage(g, p, d, mode, layout)
+        if p in TAN_NSCAL:
+            for layout in ("a", "b"):
+                gen_stage(g, p, "dit", "tan", layout)
     write(outdir, "fft_stages.S", g)
     g = Gen()
     for mode in ("a", "b", "c"):
-        for table in (False, True):
-            for err in ((False, True) if mode != "c" else (False,)):
-                gen_norm(g, mode, table, err)
         for err in ((False, True) if mode != "c" else (False,)):
-            gen_norm_quad(g, mode, err)
+            gen_norm(g, mode, err)
+            for P in (1, 2, 4):
+                gen_norm_tab(g, mode, err, P)
     write(outdir, "norm.S", g)
     g = Gen()
     gen_rows(g)
     gen_split_sq(g)
     gen_rows_stage(g, "dif")
     gen_rows_stage(g, "dit")
+    gen_rows_stage(g, "dit", tan=True)
     gen_cmul_b(g, False)
     gen_cmul_b(g, True)
     write(outdir, "pass2.S", g)

@@ -118,7 +118,8 @@ static void usage(const char *p) {
             "       %s time K N [--iters N]\n"
             "       %s throughput K N [--configs 10x1,5x2,...] [--secs S]\n"
             "       %s tune LMIN LMAX [--out FILE]\n"
-            "options: --backend ref|c2p|neon --fft L --threads T\n",
+            "options: --backend ref|c2p|neon --fft L --threads T\n"
+            "         --order 0..3 (FFT stage order, default from the tuning file)\n",
             p, p, p, p);
 }
 
@@ -145,6 +146,7 @@ int main(int argc, char **argv) {
         if (!strcmp(a, "--backend")) o.backend = parse_backend(v);
         else if (!strcmp(a, "--fft")) o.fft_len = (uint32_t)atoi(v);
         else if (!strcmp(a, "--threads")) o.threads = (uint32_t)atoi(v);
+        else if (!strcmp(a, "--order")) o.plan_order = 1 + (uint32_t)atoi(v);
         else if (!strcmp(a, "--iters")) iters = strtoull(v, 0, 10);
         else if (!strcmp(a, "--expect")) expect = v;
         else if (!strcmp(a, "--base")) base = (uint32_t)atoi(v);
@@ -235,33 +237,54 @@ int main(int argc, char **argv) {
     }
 
     if (!strcmp(cmd, "tune")) {
-        // time every usable FFT length in [k, n] (here k = LMIN, n = LMAX)
+        // time every usable FFT length in [k, n] (here k = LMIN, n = LMAX) in
+        // each of the four stage orders, interleaved so that drift in machine
+        // load hits them alike; record the fastest order with its time
         FILE *f = out ? fopen(out, "a") : NULL;
         for (uint32_t L = ((uint32_t)k + 63) / 64 * 64; L <= n; L += 64) {
-            ahn_opts lo = o;
-            lo.fft_len = L;
-            // any n with ~12 bits/word and k = 1 exercises the length
-            ahn_ctx *c = ahn_ctx_new(1, (uint64_t)L * 12, -1, &lo);
-            if (!c) continue;
-            ahn_num *x = ahn_num_new(c);
-            ahn_set_u64(c, x, 3);
-            ahn_square_n(c, x, 3);
-            double best = 1e30;
-            for (int rep = 0; rep < 3; rep++) {
-                uint64_t it = 0;
-                double t0 = now(), t1;
-                do {
-                    ahn_square_n(c, x, 2);
-                    it += 2;
-                } while ((t1 = now()) - t0 < 0.05);
-                double us = (t1 - t0) * 1e6 / it;
-                if (us < best) best = us;
+            ahn_ctx *c[4] = {0};
+            ahn_num *x[4] = {0};
+            double best[4] = {1e30, 1e30, 1e30, 1e30};
+            int ok = 1;
+            for (int ord = 0; ord < 4 && ok; ord++) {
+                ahn_opts lo = o;
+                lo.fft_len = L;
+                lo.plan_order = 1 + ord;
+                // any n with ~12 bits/word and k = 1 exercises the length
+                c[ord] = ahn_ctx_new(1, (uint64_t)L * 12, -1, &lo);
+                if (!c[ord]) {
+                    ok = 0;
+                    break;
+                }
+                x[ord] = ahn_num_new(c[ord]);
+                ahn_set_u64(c[ord], x[ord], 3);
+                ahn_square_n(c[ord], x[ord], 3);
             }
-            printf("%u %.2f\n", L, best);
-            if (f) fprintf(f, "%u %.2f\n", L, best);
-            fflush(stdout);
-            ahn_num_free(c, x);
-            ahn_ctx_free(c);
+            for (int rep = 0; ok && rep < 3; rep++) {
+                for (int ord = 0; ord < 4; ord++) {
+                    uint64_t it = 0;
+                    double t0 = now(), t1;
+                    do {
+                        ahn_square_n(c[ord], x[ord], 2);
+                        it += 2;
+                    } while ((t1 = now()) - t0 < 0.05);
+                    double us = (t1 - t0) * 1e6 / it;
+                    if (us < best[ord]) best[ord] = us;
+                }
+            }
+            if (ok) {
+                int bo = 0;
+                for (int ord = 1; ord < 4; ord++) {
+                    if (best[ord] < best[bo]) bo = ord;
+                }
+                printf("%u %.2f %d\n", L, best[bo], bo);
+                if (f) fprintf(f, "%u %.2f %d\n", L, best[bo], bo);
+                fflush(stdout);
+            }
+            for (int ord = 0; ord < 4; ord++) {
+                if (x[ord]) ahn_num_free(c[ord], x[ord]);
+                if (c[ord]) ahn_ctx_free(c[ord]);
+            }
         }
         if (f) fclose(f);
         return 0;
