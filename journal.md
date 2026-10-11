@@ -389,3 +389,33 @@ Results:
 
 That is −9.3%, more than the 7% bound for the transposes alone. 9001·2^662695−1 went from
 85.7 s to 80.3 s. GMP tests, SME tests and the residue suite all pass.
+
+## 16:30 — Speed-up plan, items 2b, 3, 4 and 5: measured and set aside
+
+- **2b, fusing the real split into the row FFT.** Skipping the split entirely saves 9%, but that
+  is its arithmetic: the split kernel has about 34 FP instructions to 9 loads and stores per
+  step, so it is FP-bound. Fusion would remove only the memory pass, estimated under 2%, for a
+  much more complicated mirrored-butterfly kernel. Not done. The transposes were different
+  because they were nearly all memory work.
+- **3, finer FFT-length granularity.** Over 4000 random (k < 10000, n of 400K–2M), the chosen L
+  averages 2.66% above the continuous minimum safe length (worst 14%). Part of that is the
+  tuning table deliberately picking a faster, longer length. This is below the 3% threshold,
+  and relaxing the shape rules would touch the normaliser and the transposes. Not done.
+- **4, safety margin.** Max round-off over 20,000 squarings at L = 32768 and 98304, k = 3, 255
+  and 9999:
+
+  | Margin | Max round-off |
+  |---|---|
+  | 0.2 (current) | 0.25–0.28 |
+  | 0.1 | 0.30–0.31 |
+  | 0.0 | 0.31–0.375 |
+
+  Full tests run 30–100× more squarings, which adds a few hundredths. A margin of 0.1 would come
+  close to the 0.40 retry threshold for about 0.75% shorter FFTs. Kept at 0.2.
+- **5, driver overhead.** The full test of 9001·2^662695−1 averages 121.2 µs per squaring
+  against 120.3 µs bare. Gerbicz, the multiplications and setup together cost about 0.75%.
+  Nothing worth doing.
+
+Of the five planned items, only the transpose fusion (−9%) paid off. Per core, the NEON
+kernels run at the 4-pipe limit and the remaining passes are FP-bound. Under full load, about
+half the slowdown is the all-core clock drop and the rest is shared L2 bandwidth.
