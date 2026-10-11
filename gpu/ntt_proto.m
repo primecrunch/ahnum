@@ -43,10 +43,15 @@ int main(int argc, char **argv) {
         uint32_t N = R * C, G = 16, TPG_ROW = (fuse ? C / 4 : C / 2) < 256 ? (fuse ? C / 4 : C / 2) : 256;
         uint32_t TPG_COL = fuse ? 128 : 256;
         uint32_t rbits = __builtin_ctz(R);
+        // AHN_GPU_REG: register-based kernels (gpu/ntt_reg.metal), each length
+        // split as A x B with A = 2^floor(log2(L) / 2), B = L / A >= A
+        int reg = getenv("AHN_GPU_REG") != NULL;
+        uint32_t AR = 1u << (__builtin_ctz(R) / 2), BR = R / AR;
+        uint32_t AC = 1u << (__builtin_ctz(C) / 2), BC = C / AC, RT = 8;
 
         id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
         NSError *err = nil;
-        NSString *src = [NSString stringWithContentsOfFile:@"gpu/ntt.metal"
+        NSString *src = [NSString stringWithContentsOfFile:reg ? @"gpu/ntt_reg.metal" : @"gpu/ntt.metal"
                                                   encoding:NSUTF8StringEncoding
                                                      error:&err];
         if (!src) {
@@ -57,6 +62,10 @@ int main(int argc, char **argv) {
                                                      "#define TPG_COL %u\n#define TPG_ROW %u\n",
                                                     R, C, G, TPG_COL, TPG_ROW];
         if (fuse) defs = [defs stringByAppendingString:@"#define FUSE 1\n"];
+        if (reg)
+            defs = [defs stringByAppendingFormat:@"#define AR %u\n#define BR %u\n#define AC %u\n"
+                                                  "#define BC %u\n#define RT %u\n",
+                                                 AR, BR, AC, BC, RT];
         id<MTLLibrary> lib = [dev newLibraryWithSource:[defs stringByAppendingString:src]
                                                options:nil
                                                  error:&err];
@@ -65,11 +74,11 @@ int main(int argc, char **argv) {
             return 1;
         }
         id<MTLComputePipelineState> pcf =
-            [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"col_fwd"] error:&err];
+            [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:reg ? @"col_fwd_r" : @"col_fwd"] error:&err];
         id<MTLComputePipelineState> prs =
-            [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"row_sq"] error:&err];
+            [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:reg ? @"row_sq_r" : @"row_sq"] error:&err];
         id<MTLComputePipelineState> pci =
-            [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"col_inv"] error:&err];
+            [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:reg ? @"col_inv_r" : @"col_inv"] error:&err];
         if (!pcf || !prs || !pci) {
             fprintf(stderr, "pipeline failed: %s\n", err.localizedDescription.UTF8String);
             return 1;
@@ -87,10 +96,11 @@ int main(int argc, char **argv) {
         // the pointwise mmul(x, x) leaves a 2^-32 factor: fold 2^32 into the scale
         uint32_t scale = mulmod(Ninv, (uint32_t)(((uint64_t)1 << 32) % P));
 
-        id<MTLBuffer> bTwR = [dev newBufferWithLength:R / 2 * 4 options:MTLResourceStorageModeShared];
-        id<MTLBuffer> bItwR = [dev newBufferWithLength:R / 2 * 4 options:MTLResourceStorageModeShared];
-        id<MTLBuffer> bTwC = [dev newBufferWithLength:C / 2 * 4 options:MTLResourceStorageModeShared];
-        id<MTLBuffer> bItwC = [dev newBufferWithLength:C / 2 * 4 options:MTLResourceStorageModeShared];
+        // w^i for i < R (C); the radix-2 kernels use the first half
+        id<MTLBuffer> bTwR = [dev newBufferWithLength:R * 4 options:MTLResourceStorageModeShared];
+        id<MTLBuffer> bItwR = [dev newBufferWithLength:R * 4 options:MTLResourceStorageModeShared];
+        id<MTLBuffer> bTwC = [dev newBufferWithLength:C * 4 options:MTLResourceStorageModeShared];
+        id<MTLBuffer> bItwC = [dev newBufferWithLength:C * 4 options:MTLResourceStorageModeShared];
         id<MTLBuffer> bT4 = [dev newBufferWithLength:(size_t)N * 4 options:MTLResourceStorageModeShared];
         id<MTLBuffer> bIt4 = [dev newBufferWithLength:(size_t)N * 4 options:MTLResourceStorageModeShared];
         id<MTLBuffer> bData = [dev newBufferWithLength:(size_t)B * N * 4
@@ -99,16 +109,17 @@ int main(int argc, char **argv) {
                                              options:MTLResourceStorageModeShared];
         uint32_t *twR = bTwR.contents, *itwR = bItwR.contents, *twC = bTwC.contents,
                  *itwC = bItwC.contents, *t4 = bT4.contents, *it4 = bIt4.contents;
-        for (uint32_t i = 0; i < R / 2; i++) {
+        for (uint32_t i = 0; i < R; i++) {
             twR[i] = to_mont(powmod(wR, i));
             itwR[i] = to_mont(powmod(wRi, i));
         }
-        for (uint32_t i = 0; i < C / 2; i++) {
+        for (uint32_t i = 0; i < C; i++) {
             twC[i] = to_mont(powmod(wC, i));
             itwC[i] = to_mont(powmod(wCi, i));
         }
         for (uint32_t r = 0; r < R; r++) {
-            uint32_t k1 = bitrev(r, rbits);  // stored row r holds frequency k1
+            // stored row r holds frequency k1 (natural order in the register kernels)
+            uint32_t k1 = reg ? r : bitrev(r, rbits);
             for (uint32_t c = 0; c < C; c++) {
                 t4[r * C + c] = to_mont(powmod(wN, (uint64_t)k1 * c));
                 it4[r * C + c] = to_mont(mulmod(powmod(wNi, (uint64_t)k1 * c), scale));
@@ -122,7 +133,30 @@ int main(int argc, char **argv) {
         memcpy(orig, data, (size_t)N * 4);
 
         id<MTLCommandQueue> q = [dev newCommandQueue];
+        void (^encode_reg)(id<MTLComputeCommandEncoder>) = ^(id<MTLComputeCommandEncoder> e) {
+            [e setComputePipelineState:pcf];
+            [e setBuffer:bData offset:0 atIndex:0];
+            [e setBuffer:bT4 offset:0 atIndex:1];
+            [e setBuffer:bPrm offset:0 atIndex:2];
+            [e setBuffer:bTwR offset:0 atIndex:3];
+            [e dispatchThreadgroups:MTLSizeMake(B * (C / G), 1, 1)
+              threadsPerThreadgroup:MTLSizeMake(G * AR, 1, 1)];
+            [e setComputePipelineState:prs];
+            [e setBuffer:bTwC offset:0 atIndex:3];
+            [e setBuffer:bItwC offset:0 atIndex:4];
+            [e dispatchThreadgroups:MTLSizeMake(B * R / RT, 1, 1)
+              threadsPerThreadgroup:MTLSizeMake(RT * AC, 1, 1)];
+            [e setComputePipelineState:pci];
+            [e setBuffer:bIt4 offset:0 atIndex:1];
+            [e setBuffer:bItwR offset:0 atIndex:3];
+            [e dispatchThreadgroups:MTLSizeMake(B * (C / G), 1, 1)
+              threadsPerThreadgroup:MTLSizeMake(G * AR, 1, 1)];
+        };
         void (^encode)(id<MTLComputeCommandEncoder>) = ^(id<MTLComputeCommandEncoder> e) {
+          if (reg) {
+            encode_reg(e);
+            return;
+          }
             [e setComputePipelineState:pcf];
             [e setBuffer:bData offset:0 atIndex:0];
             [e setBuffer:bTwR offset:0 atIndex:1];

@@ -844,3 +844,35 @@ results:
 The usual GPU FFT layout should fix it: each thread holds 8–16 elements in registers, runs a
 radix-8/16 sub-transform there, and exchanges through threadgroup memory 2–3 times per
 transform instead of 8–15.
+
+## 22:09 — Register-based GPU kernels: −12%, now limited by register spills
+
+`gpu/ntt_reg.metal` (`AHN_GPU_REG=1`): each length L splits as A × B. A thread holds B elements
+in registers and runs a length-B DFT there (unrolled radix-2 network). After the inner twiddle
+w_L^(a·kb) and one exchange through threadgroup memory, it runs the length-A DFTs on the other
+index. Two barriers per row square instead of one per radix-2 stage. Rows are read and written in
+natural order. The column pass stores rows in natural frequency order, so the four-step table is
+w_N^(k1·n2). Correct on the first run (same direct-square check).
+
+| N | radix-2 kernels | register kernels |
+|---|---|---|
+| 32768 (128 × 256: 8×16 columns, 16×16 rows) | 5.55 µs | 4.87 µs (−12%) |
+| 65536 (256 × 256) | 11.78 µs | 10.20 µs (−13%) |
+
+Counters for the register kernels against radix-2:
+
+| Counter | radix-2 | register |
+|---|---|---|
+| Threadgroup memory read / write | 709 / 709 GiB/s | 94 / 94 GiB/s |
+| Kernel occupancy | 88% | 31% |
+| Occupancy manager target | 100% | 47% |
+| L1 eviction rate | 25% | 61% |
+| Register traffic through L1 | ~0 | 72 GiB/s |
+| Integer and complex limiter / utilization | 54% / 39% | 86% / 45% |
+
+The exchange traffic went as planned, but 16 elements per thread, plus the radix-16 network's
+temporaries, overflow the register file. Values spill to L1, and the occupancy manager cuts
+occupancy to a third. Forcing full unrolling on every register-array loop changed nothing
+(4.88 µs), so the arrays were already in registers; the pressure is genuine. Next: 8 elements per
+thread with a three-step split (C = 256 as 8 × 8 × 4), one more exchange, but small enough to stay
+in registers at full occupancy.
