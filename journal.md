@@ -349,5 +349,6 @@ equally slow, which fits a machine-wide state (heat or background work) rather t
 memory footprint; the L2 hypothesis was ruled out. The table normaliser stays the default.
 
 Net result: ahnum is about 4–10% ahead of prst on throughput and 5% ahead on a single test
-(85.7 s against 90.2 s). The prst build is x86_64 gwnum translated by Rosetta 2, so a native
-arm64 gwnum, if one existed, would likely do better.
+(85.7 s against 90.2 s). prst is x86_64 gwnum translated by Rosetta 2. gwnum's FFTs are hand-written AMD64
+assembly, so no native arm64 build is possible and this is the best gwnum available on Apple
+Silicon.
