@@ -685,3 +685,41 @@ Two more ideas reasoned through and not built:
 What is left with real size is off the CPU: an integer NTT on the idle GPU running extra tests
 alongside the CPU ones. It is now on the priorities list as a research item; its first step is
 a prototype kernel timed at 49152.
+
+## 21:17 — Forward (DIF) tangent twiddles: built, measured, dropped
+
+Design: forward stages stop applying their output twiddles. Each next stage applies them on
+its inputs in tangent form, divided by input 0's factor F_0, so it still uses p − 1 tangents per
+butterfly. Its outputs carry F_0 as a pending complex factor, folded into the next stage's
+per-butterfly table.
+- Pass 1: the last stage's pending factors go into a forward copy of the four-step table.
+- Pass 2: the pending factor depends only on the column. The last stage (`tana`) gives every
+  input its own tangent and leaves a real per-column scale, which the split folds into its e/d
+  sums (`ahn_split_sq_s`, +2 ops per iteration).
+
+Kernels: `ahn_dif_r{2,3,4,8}_tanf[_b]`, `_tana`, `_tant4_b`, `ahn_dif_r4_rows_notw`. GMP tests
+passed on the first build.
+
+µs per squaring, quiet machine, new path against `AHN_NO_TANF=1`:
+
+| Number | FFT | old | new |
+|---|---|---|---|
+| 9357·2^369717−1 | 26880 | 63.5 | 63.4 |
+| 9001·2^662695−1 | 49152 | 112.4 | 110.7 (−1.5%) |
+| 8243·2^872226−1 | 65536 | 151.7 | 152.0 |
+| 9999·2^1500000−1 | 114688 | 295.8 | 297.9 (+0.7%) |
+
+Why it fell short of the 1.5–3% estimate (and far short of the 5.3–6.4% bound):
+- **The last stages gain ops.** The old last forward stages had no twiddles: radix 8 at 56 ops,
+  or 88 with the four-step multiply. They now take over the previous stage's twiddles: 68 for
+  `tana`, 98 for `tant4`. The bound build never paid that, and my estimate missed it.
+- **Rows in does not care about FP.** Its kernel went from 56 to 32 FP ops, and its time stayed
+  at 19.5–19.8 µs (at 114688); it is bound by loading the two rows from L2.
+- **The second four-step table costs ~1%.** Before, the forward pass reused the inverse pass's
+  table slice while it was still in L1. Pointing the forward pass at the original table (wrong
+  results) recovered ~3.2 µs at 114688, but even then pass 1 forward was no faster than the old
+  path.
+
+Removing that table would mean also redesigning the inverse so the pending factors fold into the
+normaliser weights, worth at most ~1% more. Dropped. The patch is kept in
+`docs/experiments/dif-tangent-forward.patch` (applies to 6b24cf7).

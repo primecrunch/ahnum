@@ -11,17 +11,13 @@ pass-2 forward and inverse stages ~11–12% each, split 10%, row transposes in/o
 
 ## Candidates
 
-1. **Tangent-form twiddles in the forward (DIF) stages.** Shelved below the bar: bound measured
-   at 5.3–6.4% (2026-10-11, all forward stage twiddle multiplies removed), expected net ~1.5–3%.
-   The output twiddles have to move to the next stage's inputs (p twiddles per butterfly
-   instead of p − 1, so radix 8 saves 12 of 28 twiddle ops and radix 4 saves 4 of 12). Pass 2
-   also needs a scale fix-up before the split (~1 op per point). The DIT half recovered 45–65%
-   of its bound with none of these overheads. Large change.
-2. **Pass-2 rows-in stage (~77% of the FP limit).** It loads both rows from L2. Look at
+1. **Pass-2 rows-in stage (~77% of the FP limit).** It loads both rows from L2. Look at
    reordering or a larger first radix so there is more compute per byte loaded. Ceiling ~2 µs
-   (~1.7%) at 49152 even at the full FP rate, so it is below the bar on its own.
+   (~1.7%) at 49152 even at the full FP rate, so it is below the bar on its own. It is bound by
+   loading the rows, not by FP: dropping its twiddle multiplies (56 → 32 ops) did not change
+   its time.
 
-3. **Integer NTT on the GPU, alongside the CPU tests (research).** Apple GPUs have no FP64, but a
+2. **Integer NTT on the GPU, alongside the CPU tests (research).** Apple GPUs have no FP64, but a
    number-theoretic transform over 32-bit primes (Montgomery multiply, CRT across several
    primes) in Metal could run extra tests while all CPU cores are busy. It is the only idea
    left that could add tens of percent of throughput instead of a few. It has no cheap bound:
@@ -38,6 +34,11 @@ pass-2 forward and inverse stages ~11–12% each, split 10%, row transposes in/o
 
 ## Tried and dropped
 
+- Tangent-form twiddles in the forward (DIF) stages (2026-10-11, built, patch in
+  `docs/experiments/dif-tangent-forward.patch`): −1.5% at 49152, ~0 at 28672 and 65536, +0.8%
+  at 114688. The twiddles move into the last forward stages, which had none before (radix 8: 56 →
+  68 ops). Pass 2's rows-in stage is load-bound, so dropping its twiddles saves nothing. Pass 1
+  needs a second four-step table (~1%). The split scale fold adds 2 ops per iteration.
 - Shrinking or computing the four-step and normaliser tables to cut L2 traffic (2026-10-11):
   making both L1-resident (wrong results) saves ~3% on one core, but only 0–2% of 10- and
   14-test throughput, within heat drift. Table traffic is not what slows tests under load, and

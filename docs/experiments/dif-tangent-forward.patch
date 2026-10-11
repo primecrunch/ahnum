@@ -1,0 +1,711 @@
+diff --git a/gen/gen_kernels.py b/gen/gen_kernels.py
+index 2c34d5c..da8036c 100644
+--- a/gen/gen_kernels.py
++++ b/gen/gen_kernels.py
+@@ -259,29 +259,31 @@ def bfly_s(f, a, b, rho):
+ 
+ 
+ def bfly_j_s(f, a, b, rho):
+-    """(a + J rho b, a - J rho b), J = +i (inverse transforms only)."""
+-    assert f.sign > 0
++    """(a + J rho b, a - J rho b), J = -i (forward) or +i (inverse)."""
+     t = f.R.cx()
+-    # a + i b = (ar - bi, ai + br); a - i b = (ar + bi, ai - br)
++    # J = +i: a + J b = (ar - bi, ai + br); J = -i: a + J b = (ar + bi, ai - br)
++    add_re, sub_re = ("fmls", "fmla") if f.sign > 0 else ("fmla", "fmls")
+     f.e("mov v%d.16b, v%d.16b" % (t[0], a[0]))
+-    f.e("fmla v%d.2d, v%d.2d, %s" % (t[0], b[1], rho))
++    f.e("%s v%d.2d, v%d.2d, %s" % (sub_re, t[0], b[1], rho))
+     f.e("mov v%d.16b, v%d.16b" % (t[1], a[1]))
+-    f.e("fmls v%d.2d, v%d.2d, %s" % (t[1], b[0], rho))
+-    f.e("fmls v%d.2d, v%d.2d, %s" % (a[0], b[1], rho))
+-    f.e("fmla v%d.2d, v%d.2d, %s" % (a[1], b[0], rho))
++    f.e("%s v%d.2d, v%d.2d, %s" % (add_re, t[1], b[0], rho))
++    f.e("%s v%d.2d, v%d.2d, %s" % (add_re, a[0], b[1], rho))
++    f.e("%s v%d.2d, v%d.2d, %s" % (sub_re, a[1], b[0], rho))
+     f.R.putcx(b)
+     return a, t
+ 
+ 
+ def w8_ns(f, b, power):
+-    """Inverse W8^power without the sqrt(1/2) factor (the caller's scale holds
+-    it): power 1: b (1 + i), scale +c; power 3: b (1 - i), scale -c."""
++    """W8^power without the sqrt(1/2) factor (the caller's scale holds it).
++    Inverse: power 1: b (1 + i), scale +c; power 3: b (1 - i), scale -c.
++    Forward: power 1: b (1 - i), scale +c; power 3: b (1 + i), scale -c.
++    The scale signs match, so both directions share the table layout."""
+     t = f.R.cx()
+     br, bi = v(b[0]), v(b[1])
+-    if power == 1:  # (br - bi, br + bi)
++    if (power == 1) == (f.sign > 0):  # b (1 + i) = (br - bi, br + bi)
+         f.e("fsub %s, %s, %s" % (v(t[0]), br, bi))
+         f.e("fadd %s, %s, %s" % (v(t[1]), br, bi))
+-    else:  # (br + bi, bi - br)
++    else:  # b (1 - i) = (br + bi, bi - br)
+         f.e("fadd %s, %s, %s" % (v(t[0]), br, bi))
+         f.e("fsub %s, %s, %s" % (v(t[1]), bi, br))
+     f.R.putcx(b)
+@@ -289,7 +291,7 @@ def w8_ns(f, b, power):
+ 
+ 
+ def dft_tan(f, x, p, S, store):
+-    """Inverse DFT of x (inputs already tangent-multiplied, scales c_t pending)
++    """DFT of x in f's direction (inputs already tangent-multiplied, scales c_t pending)
+     using scalar refs S (list in TAN_NSCAL order); outputs have unit scale and
+     go to store(t, value)."""
+     if p == 2:
+@@ -339,8 +341,12 @@ def dft_tan(f, x, p, S, store):
+         f.e("fadd %s, %s, %s" % (v(A[1]), v(A[1]), v(B[0])))
+         f.R.putcx(B)
+         f.R.putcx(D1)
+-        store(1, A)
+-        store(2, Y1)
++        if f.sign > 0:
++            store(1, A)
++            store(2, Y1)
++        else:
++            store(1, Y1)
++            store(2, A)
+         for k in range(2):
+             f.e("fmla v%d.2d, v%d.2d, %s" % (x0[k], S1[k], S[5]))
+         f.R.putcx(S1)
+@@ -434,9 +440,18 @@ def stc(g, c, addr, layout):
+ 
+ 
+ def gen_stage(g, p, direction, mode, layout="a"):
+-    """direction 'dif' or 'dit'; mode 'tw', 'notw', 't4' or 'tan' (DIT with a
+-    tangent-form table, p in TAN_NSCAL); layout 'a' or 'b' (layout 'b' kernels
+-    carry the suffix _b)."""
++    """direction 'dif' or 'dit'; mode 'tw', 'notw', 't4' or a tangent mode (p in
++    TAN_NSCAL); layout 'a' or 'b' (layout 'b' kernels carry the suffix _b).
++    Tangent modes:
++      'tan'   DIT, input twiddles, table per j (ahn_tan_table)
++      'tanf'  DIF, input twiddles taken over from the previous stage, one table
++              record per butterfly (the pointer runs on across blocks); outputs
++              carry a pending complex factor for the next stage's table
++      'tana'  'tanf' plus a tangent on input 0 (tau_0 after the usual scalars),
++              leaving a real pending scale c_0 on the outputs
++      'tant4' 'tanf' plus the four-step output multiply (s = 1); arguments
++              (base, estride, nlg, nblocks, bstride, tw, delta)"""
++    tanmodes = ("tan", "tanf", "tana", "tant4")
+     name = "%s%s_r%d%s%s" % (PREFIX, direction, p, "" if mode == "tw" else "_" + mode,
+                              "" if layout == "a" else "_b")
+     sign = -1 if direction == "dif" else 1
+@@ -449,6 +464,11 @@ def gen_stage(g, p, direction, mode, layout="a"):
+     if mode == "t4":
+         g.emit("mov x6, x5")  # delta
+         g.emit("mov x5, #1")
++    tb = "x6"  # twiddle table base
++    if mode == "tant4":
++        g.emit("mov x26, x5")  # table; x6 is delta
++        g.emit("mov x5, #1")
++        tb = "x26"
+     g.emit("mul x7, x5, x1")  # S = s * estride
+     # element offsets t*S in x19..x25
+     offregs = ["xzr", "x7", "x19", "x20", "x21", "x22", "x23", "x24"]
+@@ -457,8 +477,8 @@ def gen_stage(g, p, direction, mode, layout="a"):
+ 
+     nconst = 0
+     cname = None
+-    if mode == "tan":
+-        pass  # all constants are folded into the per-j scalars
++    if mode in tanmodes:
++        pass  # all constants are folded into the table scalars
+     elif p == 8:
+         nconst = 1
+         cname = "Lc8_%s_%s_%s" % (direction, mode, layout)
+@@ -474,7 +494,8 @@ def gen_stage(g, p, direction, mode, layout="a"):
+         cname = "Lcp%d_%s_%s_%s" % (p, direction, mode, layout)
+         const_table(g, cname, vals)
+     # register budget: twiddles at the top, constants below them
+-    ntw = p - 1 if mode == "tw" else (TAN_NSCAL[p] + 1) // 2 if mode == "tan" else 0
++    nscal = TAN_NSCAL.get(p, 0) + (1 if mode == "tana" else 0)
++    ntw = p - 1 if mode == "tw" else (nscal + 1) // 2 if mode in tanmodes else 0
+     allregs = list(range(32))
+     twregs = allregs[32 - ntw:]
+     cregs = allregs[32 - ntw - nconst:32 - ntw]
+@@ -485,13 +506,17 @@ def gen_stage(g, p, direction, mode, layout="a"):
+         for i in range(0, nconst):
+             g.emit("ldr q%d, [x9, #%d]" % (cregs[i], 16 * i))
+ 
++    perbfly = mode in ("tanf", "tana", "tant4")
+     g.emit("mov x8, x0")  # block pointer
++    if perbfly:
++        g.emit("mov x10, %s" % tb)  # twiddle pointer, runs on across blocks
+     g.label("1")  # block loop
+     g.emit("mov x9, x8")  # j pointer
+-    g.emit("mov x10, x6")  # twiddle pointer
++    if not perbfly:
++        g.emit("mov x10, %s" % tb)  # twiddle pointer
+     g.emit("mov x11, x5")  # j counter
+     g.label("2")  # j loop
+-    if mode in ("tw", "tan"):
++    if mode == "tw" or mode in tanmodes:
+         for t in range(ntw):
+             g.emit("ldr q%d, [x10], #16" % twregs[t])
+     g.emit("mov x12, x9")  # lane-group pointer
+@@ -507,8 +532,11 @@ def gen_stage(g, p, direction, mode, layout="a"):
+         ldc(g, c, "x14", layout)
+         if direction == "dit" and t > 0 and mode == "tw":
+             c = cmul_tw(f, c, twregs[t - 1], conj=True)
+-        if mode == "tan" and t > 0:
++        if mode in tanmodes and t > 0:
+             c = tan_mul(f, c, "v%d.d[%d]" % (twregs[(t - 1) // 2], (t - 1) % 2))
++        if mode == "tana" and t == 0:
++            i0 = nscal - 1
++            c = tan_mul(f, c, "v%d.d[%d]" % (twregs[i0 // 2], i0 % 2))
+         if direction == "dit" and mode == "t4":
+             w = R.cx()
+             g.emit("add x15, x14, x6")
+@@ -520,7 +548,7 @@ def gen_stage(g, p, direction, mode, layout="a"):
+         if direction == "dif" and t > 0 and mode == "tw":
+             y = cmul_tw(f, y, twregs[t - 1], conj=False)
+         g.emit("add x14, x12, %s" % offregs[t])
+-        if direction == "dif" and mode == "t4":
++        if direction == "dif" and mode in ("t4", "tant4"):
+             w = R.cx()
+             g.emit("add x15, x14, x6")
+             ldc(g, w, "x15", layout)
+@@ -528,7 +556,7 @@ def gen_stage(g, p, direction, mode, layout="a"):
+         stc(g, y, "x14", layout)
+         R.putcx(y)
+ 
+-    if mode == "tan":
++    if mode in tanmodes:
+         ys = None
+         S = ["v%d.d[%d]" % (twregs[i // 2], i % 2) for i in range(TAN_NSCAL[p])]
+         dft_tan(f, x, p, S, store)
+@@ -839,7 +867,7 @@ def gen_rows(g):
+     E("ret")
+ 
+ 
+-def gen_rows_stage(g, direction, tan=False):
++def gen_rows_stage(g, direction, tan=False, notw=False):
+     """First row-FFT stage fused with the row-pair transpose (pass 2).
+ 
+     void ahn_dif_r4_rows(const double *rp, const double *rpp, double *scr, size_t C,
+@@ -856,10 +884,12 @@ def gen_rows_stage(g, direction, tan=False):
+     C must be a multiple of 8.
+     tan (DIT only, suffix _tan): tw is the tangent-form table (ahn_tan_table,
+     6 scalars per j), as in the 'tan' stage kernels.
++    notw (DIF only, suffix _notw): no output twiddles (the next stage takes
++    them over, see the 'tanf' stage kernels); tw is unused.
+     """
+     E = g.emit
+-    assert not (tan and direction == "dif")
+-    name = "%s%s_r4_rows%s" % (PREFIX, direction, "_tan" if tan else "")
++    assert not (tan and direction == "dif") and not (notw and direction == "dit")
++    name = "%s%s_r4_rows%s" % (PREFIX, direction, "_tan" if tan else "_notw" if notw else "")
+     fwd = direction == "dif"
+     g.out.append("")
+     g.out.append(".globl %s" % name)
+@@ -871,7 +901,8 @@ def gen_rows_stage(g, direction, tan=False):
+     twregs = [26, 27, 28, 29, 30, 31]
+     g.label("1")
+     for i, r in enumerate(twregs):
+-        E("ldr q%d, [x4], #16" % r)
++        if not notw:
++            E("ldr q%d, [x4], #16" % r)
+     # row offsets of q_t = j + t*s: off = q*8 + (q>>3)*64 ; scratch offset q*32
+     for t in range(4):
+         E("madd x%d, x5, x%d, x6" % (9 + t, 19 + 0, ) if False else "mov x16, #%d" % t)
+@@ -925,7 +956,7 @@ def gen_rows_stage(g, direction, tan=False):
+     for t in range(4):
+         a, b = ya[t], yb[t]
+         if fwd:
+-            if t > 0:
++            if t > 0 and not notw:
+                 a = cmul_tw(f, a, twregs[t - 1], conj=False)
+                 b = cmul_tw(f, b, twregs[3 + t - 1], conj=False)
+             E("add x15, x2, x%d" % (19 + t))
+@@ -959,19 +990,25 @@ def gen_rows_stage(g, direction, tan=False):
+     E("ret")
+ 
+ 
+-def gen_split_sq(g):
++def gen_split_sq(g, scaled=False):
+     """void ahn_split_sq(double *scr, size_t C, const double *rs, const double *cs)
+     General row pair (lanes p, p'): lane l at q pairs with lane 1-l at C-1-q.
+     rs = {rsr_p, rsr_p', rsi_p, rsi_p'} (w_H^{k_r} per lane), cs[q] = packed
+-    w_C^{k_c(q)}. Squares in the frequency domain (see neon.c split1)."""
++    w_C^{k_c(q)}. Squares in the frequency domain (see neon.c split1).
++    scaled (ahn_split_sq_s, extra argument const double *sc): the stored value
++    at q is U(q) / sc[q] (the real pending scale left by a 'tana' last row
++    stage, the same for both lanes); the scales fold into the e/d sums."""
+     E = g.emit
+-    name = PREFIX + "split_sq"
++    name = PREFIX + ("split_sq_s" if scaled else "split_sq")
+     g.out.append("")
+     g.out.append(".globl %s" % name)
+     g.out.append(".p2align 5")
+     g.label(name)
+     g.out.append(SAVE)
+     E("ldp q30, q31, [x2]")         # RSr, RSi
++    if scaled:
++        E("add x15, x4, x1, lsl #3")
++        E("sub x15, x15, #8")       # sc[C-1]
+     E("add x9, x0, x1, lsl #5")     # one past the end
+     E("sub x9, x9, #32")            # element C-1
+     E("lsr x1, x1, #1")             # C/2 iterations
+@@ -981,15 +1018,30 @@ def gen_split_sq(g):
+     E("ldp q2, q3, [x9]")           # B (unswapped)
+     E("ext v2.16b, v2.16b, v2.16b, #8")
+     E("ext v3.16b, v3.16b, v3.16b, #8")
++    if scaled:
++        E("ldr d27, [x4], #8")      # sc[q]
++        E("ldr d28, [x15], #-8")    # sc[C-1-q]
+     # w2 = RS * cs
+     E("fmul v4.2d, v30.2d, v29.d[0]")
+     E("fmls v4.2d, v31.2d, v29.d[1]")   # w2r
+     E("fmul v5.2d, v30.2d, v29.d[1]")
+     E("fmla v5.2d, v31.2d, v29.d[0]")   # w2i
+-    E("fadd v6.2d, v0.2d, v2.2d")       # er
+-    E("fsub v7.2d, v1.2d, v3.2d")       # ei
+-    E("fsub v16.2d, v0.2d, v2.2d")      # dr
+-    E("fadd v17.2d, v1.2d, v3.2d")      # di
++    if scaled:
++        E("fmul v0.2d, v0.2d, v27.d[0]")
++        E("fmul v1.2d, v1.2d, v27.d[0]")
++        E("mov v6.16b, v0.16b")
++        E("fmla v6.2d, v2.2d, v28.d[0]")    # er
++        E("mov v7.16b, v1.16b")
++        E("fmls v7.2d, v3.2d, v28.d[0]")    # ei
++        E("mov v16.16b, v0.16b")
++        E("fmls v16.2d, v2.2d, v28.d[0]")   # dr
++        E("mov v17.16b, v1.16b")
++        E("fmla v17.2d, v3.2d, v28.d[0]")   # di
++    else:
++        E("fadd v6.2d, v0.2d, v2.2d")       # er
++        E("fsub v7.2d, v1.2d, v3.2d")       # ei
++        E("fsub v16.2d, v0.2d, v2.2d")      # dr
++        E("fadd v17.2d, v1.2d, v3.2d")      # di
+     E("fmul v18.2d, v6.2d, v6.2d")
+     E("fmls v18.2d, v7.2d, v7.2d")      # e2r
+     E("fmul v19.2d, v6.2d, v7.2d")
+@@ -1208,6 +1260,9 @@ def main():
+         if p in TAN_NSCAL:
+             for layout in ("a", "b"):
+                 gen_stage(g, p, "dit", "tan", layout)
++                gen_stage(g, p, "dif", "tanf", layout)
++            gen_stage(g, p, "dif", "tana", "a")
++            gen_stage(g, p, "dif", "tant4", "b")
+     write(outdir, "fft_stages.S", g)
+     g = Gen()
+     for mode in ("a", "b", "c"):
+@@ -1219,9 +1274,11 @@ def main():
+     g = Gen()
+     gen_rows(g)
+     gen_split_sq(g)
++    gen_split_sq(g, scaled=True)
+     gen_rows_stage(g, "dif")
+     gen_rows_stage(g, "dit")
+     gen_rows_stage(g, "dit", tan=True)
++    gen_rows_stage(g, "dif", notw=True)
+     gen_cmul_b(g, False)
+     gen_cmul_b(g, True)
+     write(outdir, "pass2.S", g)
+diff --git a/src/kernels.h b/src/kernels.h
+index 70e1b86..3bede52 100644
+--- a/src/kernels.h
++++ b/src/kernels.h
+@@ -32,6 +32,23 @@ AHN_STAGE_TAN(4)
+ AHN_STAGE_TAN(8)
+ #undef AHN_STAGE_TAN
+ 
++// Tangent-form DIF stages with input twiddles taken over from the previous
++// stage, one table record per butterfly (see gen_stage 'tanf'/'tana'/'tant4').
++#define AHN_STAGE_TANF(p)                                                                     \
++    void ahn_dif_r##p##_tanf(double *base, size_t estride, size_t nlg, size_t nblocks,       \
++                             size_t bstride, size_t s, const double *tw);                    \
++    void ahn_dif_r##p##_tanf_b(double *base, size_t estride, size_t nlg, size_t nblocks,     \
++                               size_t bstride, size_t s, const double *tw);                  \
++    void ahn_dif_r##p##_tana(double *base, size_t estride, size_t nlg, size_t nblocks,       \
++                             size_t bstride, size_t s, const double *tw);                    \
++    void ahn_dif_r##p##_tant4_b(double *base, size_t estride, size_t nlg, size_t nblocks,    \
++                                size_t bstride, const double *tw, ptrdiff_t delta);
++AHN_STAGE_TANF(2)
++AHN_STAGE_TANF(3)
++AHN_STAGE_TANF(4)
++AHN_STAGE_TANF(8)
++#undef AHN_STAGE_TANF
++
+ #define AHN_STAGES(p) AHN_STAGE(dif, p) AHN_STAGE(dit, p) AHN_STAGE_B(dif, p) AHN_STAGE_B(dit, p)
+ AHN_STAGES(2)
+ AHN_STAGES(3)
+@@ -81,6 +98,9 @@ void ahn_cmulc_b(double *base, size_t estride, size_t n, ptrdiff_t delta);
+ void ahn_dif_r4_rows(const double *rp, const double *rpp, double *scr, size_t C, const double *tw);
+ void ahn_dit_r4_rows(double *rp, double *rpp, const double *scr, size_t C, const double *tw);
+ void ahn_dit_r4_rows_tan(double *rp, double *rpp, const double *scr, size_t C, const double *tw);
++void ahn_dif_r4_rows_notw(const double *rp, const double *rpp, double *scr, size_t C,
++                          const double *tw);
+ void ahn_split_sq(double *scr, size_t C, const double *rs, const double *cs);
++void ahn_split_sq_s(double *scr, size_t C, const double *rs, const double *cs, const double *sc);
+ 
+ #endif
+diff --git a/src/neon.c b/src/neon.c
+index 15af8d8..b07d5d2 100644
+--- a/src/neon.c
++++ b/src/neon.c
+@@ -16,6 +16,7 @@
+ #include "kernels.h"
+ #include "threads.h"
+ 
++#include <complex.h>
+ #include <math.h>
+ #include <stdio.h>
+ #include <sys/sysctl.h>
+@@ -70,6 +71,7 @@ static inline int prof_enabled(void) {
+ 
+ typedef void (*stage_fn)(double *, size_t, size_t, size_t, size_t, size_t, const double *);
+ typedef void (*t4_fn)(double *, size_t, size_t, size_t, size_t, ptrdiff_t);
++typedef void (*tant4_fn)(double *, size_t, size_t, size_t, size_t, const double *, ptrdiff_t);
+ 
+ typedef struct {
+     uint8_t p;
+@@ -82,6 +84,11 @@ typedef struct {
+     // tangent-form DIT (p in 2, 3, 4, 8 with s > 1, else NULL) and its table
+     stage_fn dit_tan[2];
+     double *twt;
++    // tangent-form forward path (see fwd_tan_init): tanf[layout], tana (layout
++    // a), tant4 (layout b), and this stage's per-butterfly table
++    stage_fn tanf[2], tana;
++    tant4_fn tant4;
++    double *ftab;
+     // radix-8 only: complex 8x8 matrices per j for the SME kernel (1 KB each),
+     // DIF: diag(w_j) F8, DIT: conj(F8) diag(conj w_j)
+     double *mdif, *mdit;
+@@ -92,6 +99,7 @@ typedef struct {
+     stage st[32];
+     double *twmem;
+     uint32_t *rev, *pos;
++    int fwdtan;  // forward transform uses the tangent-form path
+ } nplan;
+ 
+ typedef struct {
+@@ -99,6 +107,8 @@ typedef struct {
+     size_t rowstride;  // bytes
+     nplan pr, pc;
+     double *t4;        // four-step twiddles, same layout as data
++    double *t4f;       // forward copy times the column plan's pending factors (tangent path)
++    double *rsc;       // per column position: the row plan's pending real scale (tangent path)
+     int sme;           // radix-8 column stages on the SME unit
+     double *A, *IA;    // [g*R + r]
+     uint64_t *mask;    // [g*R + r]
+@@ -181,6 +191,43 @@ uint32_t ahn_tan_nscal(uint32_t p) {
+     return 0;
+ }
+ 
++// One tangent-form record (TAN_NSCAL order, see gen/gen_kernels.py) from the
++// input scales c[0..p-1] (c[0] = 1) and tangents tau[1..p-1].
++static void tan_record(uint32_t p, const double *c, const double *tau, double *o) {
++    for (uint32_t t = 1; t < p; t++) o[t - 1] = tau[t];
++    if (p == 2) {
++        o[1] = c[1];
++    } else if (p == 3) {
++        o[2] = c[2] / c[1];
++        o[3] = c[1] * -0.5;
++        o[4] = c[1] * 0.86602540378443864676;
++        o[5] = c[1];
++    } else if (p == 4) {
++        o[3] = c[2];
++        o[4] = c[3] / c[1];
++        o[5] = c[1];
++    } else {
++        o[7] = c[4];
++        o[8] = c[5] / c[1];
++        o[9] = c[6] / c[2];
++        o[10] = c[7] / c[3];
++        o[11] = c[2];
++        o[12] = c[3] / c[1];
++        o[13] = -c[3] / c[1];
++        o[14] = c[1];
++        o[15] = c[1] * 0.70710678118654752440;
++    }
++}
++
++// z = c (1 + i tau); an exact c = 0 is stored as 2^-60 (the stray c * x term
++// is far below rounding).
++static void tan_split(double complex z, double *c, double *tau) {
++    double re = creal(z);
++    if (re == 0) re = 0x1p-60;
++    *c = re;
++    *tau = cimag(z) / re;
++}
++
+ // See the tangent-form note in gen/gen_kernels.py: input t of the butterfly at
+ // j is multiplied by conj(w) = c_t (1 + i tau_t), theta_t = 2 pi t j / (p s).
+ int ahn_tan_table(uint32_t p, uint32_t s, double *out) {
+@@ -190,36 +237,98 @@ int ahn_tan_table(uint32_t p, uint32_t s, double *out) {
+         double c[8] = {1}, tau[8] = {0};
+         for (uint32_t t = 1; t < p; t++) {
+             double a = 2.0 * (double)((uint64_t)t * j % sz) / sz;
+-            double cs = __cospi(a), sn = __sinpi(a);
+-            if (cs == 0) cs = 0x1p-60;
+-            c[t] = cs;
+-            tau[t] = sn / cs;
++            tan_split(__cospi(a) + I * __sinpi(a), &c[t], &tau[t]);
+         }
+-        double *o = out + (size_t)j * ns;
+-        for (uint32_t t = 1; t < p; t++) o[t - 1] = tau[t];
+-        if (p == 2) {
+-            o[1] = c[1];
+-        } else if (p == 3) {
+-            o[2] = c[2] / c[1];
+-            o[3] = c[1] * -0.5;
+-            o[4] = c[1] * 0.86602540378443864676;
+-            o[5] = c[1];
+-        } else if (p == 4) {
+-            o[3] = c[2];
+-            o[4] = c[3] / c[1];
+-            o[5] = c[1];
+-        } else {
+-            o[7] = c[4];
+-            o[8] = c[5] / c[1];
+-            o[9] = c[6] / c[2];
+-            o[10] = c[7] / c[3];
+-            o[11] = c[2];
+-            o[12] = c[3] / c[1];
+-            o[13] = -c[3] / c[1];
+-            o[14] = c[1];
+-            o[15] = c[1] * 0.70710678118654752440;
++        tan_record(p, c, tau, out + (size_t)j * ns);
++    }
++    return 0;
++}
++
++// Forward twiddle w_sz^{t j}.
++static double complex fwd_w(uint64_t tj, uint32_t sz) {
++    double a = 2.0 * (double)(tj % sz) / sz;
++    return __cospi(a) - I * __sinpi(a);
++}
++
++// Tangent-form forward path for a plan. Stage 0 runs without twiddles; each
++// later stage applies the previous stage's output twiddles on its inputs, in
++// tangent form, divided by input 0's factor F_0, so its outputs carry the
++// pending complex factor F_0 for the next stage. Q[e] tracks what the value
++// stored at e must still be multiplied by. The last stage (s = 1):
++//   real_last = 0: 'tant4', pending factors returned in pend[e] (complex),
++//                  to be folded into the four-step table;
++//   real_last = 1: 'tana', each input gets its own tangent and the outputs
++//                  carry the real scale c_0, returned in scale[e].
++// Needs radices 2, 3, 4, 8 and at least two stages; returns -1 otherwise.
++static int fwd_tan_init(nplan *pl, int real_last, double complex *pend, double *scale) {
++    uint32_t n = pl->n, m = pl->nst;
++    if (m < 2) return -1;
++    for (uint32_t k = 0; k < m; k++) {
++        if (!ahn_tan_nscal(pl->st[k].p)) return -1;
++    }
++    double complex *Q = malloc(n * sizeof *Q), *Qn = malloc(n * sizeof *Qn);
++    {
++        const stage *s0 = &pl->st[0];
++        uint32_t sz = s0->p * s0->s;
++        for (uint32_t e = 0; e < n; e++) {
++            uint32_t o = e % sz;
++            Q[e] = fwd_w((uint64_t)(o / s0->s) * (o % s0->s), sz);
++        }
++    }
++    for (uint32_t k = 1; k < m; k++) {
++        stage *st = &pl->st[k];
++        uint32_t p = st->p, sk = st->s, sz = p * sk;
++        int last = k == m - 1, tana = last && real_last;
++        uint32_t ns = ahn_tan_nscal(p) + (tana ? 1 : 0), rec = (ns + 1) & ~1u;
++        st->ftab = ahn_alloc((size_t)st->nblocks * sk * rec * sizeof(double));
++        double *o = st->ftab;
++        for (uint32_t b = 0; b < st->nblocks; b++) {
++            for (uint32_t j = 0; j < sk; j++, o += rec) {
++                double complex F[8];
++                double c[8], tau[8];
++                for (uint32_t u = 0; u < p; u++) F[u] = Q[b * sz + j + u * sk];
++                if (tana) {
++                    for (uint32_t u = 0; u < p; u++) tan_split(F[u], &c[u], &tau[u]);
++                    double c0 = c[0];
++                    for (uint32_t u = 0; u < p; u++) c[u] /= c0;
++                    tan_record(p, c, tau, o);
++                    o[ns - 1] = tau[0];
++                    for (uint32_t t = 0; t < p; t++) scale[b * sz + j + t * sk] = c0;
++                } else {
++                    c[0] = 1;
++                    tau[0] = 0;
++                    for (uint32_t u = 1; u < p; u++) tan_split(F[u] / F[0], &c[u], &tau[u]);
++                    tan_record(p, c, tau, o);
++                    for (uint32_t t = 0; t < p; t++) {
++                        Qn[b * sz + j + t * sk] = F[0] * fwd_w((uint64_t)t * j, sz);
++                    }
++                }
++                if (ns & 1) o[ns] = 0;
++            }
++        }
++        double complex *x = Q;
++        Q = Qn;
++        Qn = x;
++        st->tanf[0] = st->tanf[1] = NULL;
++        switch (p) {
++#define TANF(P)                                  \
++    case P:                                      \
++        st->tanf[0] = ahn_dif_r##P##_tanf;       \
++        st->tanf[1] = ahn_dif_r##P##_tanf_b;     \
++        st->tana = ahn_dif_r##P##_tana;          \
++        st->tant4 = ahn_dif_r##P##_tant4_b;      \
++        break;
++            TANF(2)
++            TANF(3)
++            TANF(4)
++            TANF(8)
++#undef TANF
+         }
+     }
++    if (!real_last) memcpy(pend, Q, n * sizeof *Q);
++    free(Q);
++    free(Qn);
++    pl->fwdtan = 1;
+     return 0;
+ }
+ 
+@@ -340,6 +449,7 @@ static int nplan_init(nplan *pl, uint32_t n, int first4, int asc) {
+ 
+ static void nplan_free(nplan *pl) {
+     for (uint32_t i = 0; i < pl->nst; i++) {
++        ahn_free_aligned(pl->st[i].ftab);
+         ahn_free_aligned(pl->st[i].twt);
+         ahn_free_aligned(pl->st[i].mdif);
+         ahn_free_aligned(pl->st[i].mdit);
+@@ -381,6 +491,22 @@ static void plan_inv(const nplan *pl, int lay, double *base, size_t es, size_t n
+     }
+ }
+ 
++// Tangent-form forward path (fwd_tan_init). Stage 0 has no twiddles; the
++// caller runs it itself when first0 is 0 (the pass-2 rows kernel fuses it).
++// lay 1 ends with the four-step multiply (delta to the forward table); lay 0
++// ends with the 'tana' stage and leaves the real pending scales.
++static void plan_fwd_tan(const nplan *pl, int lay, double *base, size_t es, size_t nlg,
++                         ptrdiff_t delta, int first0) {
++    for (uint32_t i = first0 ? 0 : 1; i < pl->nst; i++) {
++        const stage *st = &pl->st[i];
++        size_t bs = (size_t)st->s * st->p * es;
++        if (i == 0) st->notw_f[lay](base, es, nlg, st->nblocks, bs, st->s, NULL);
++        else if (i < pl->nst - 1) st->tanf[lay](base, es, nlg, st->nblocks, bs, st->s, st->ftab);
++        else if (lay) st->tant4(base, es, nlg, st->nblocks, bs, st->ftab, delta);
++        else st->tana(base, es, nlg, st->nblocks, bs, 1, st->ftab);
++    }
++}
++
+ // ---- layout -------------------------------------------------------------
+ 
+ // Real part of element (r, c); the imaginary part is IM doubles further on.
+@@ -478,6 +604,29 @@ static int neon_init_impl(ahn_ctx *ctx, int sme) {
+             e[IM] = -__sinpi(a);
+         }
+     }
++    // tangent-form forward path (not with the SME stages, which fold their
++    // twiddles into matrices)
++    if (!sme && !getenv("AHN_NO_TANF")) {
++        double complex *pend = malloc(R * sizeof *pend);
++        if (!fwd_tan_init(&st->pr, 0, pend, NULL)) {
++            st->t4f = ahn_alloc(ctx->num_doubles * sizeof(double));
++            memset(st->t4f, 0, ctx->num_doubles * sizeof(double));
++            for (uint32_t p = 0; p < R; p++) {
++                for (uint32_t c = 0; c < C; c++) {
++                    double *e = elem(st, st->t4, p, c), *f = elem(st, st->t4f, p, c);
++                    double complex z = (e[0] + I * e[IM]) * pend[p];
++                    f[0] = creal(z);
++                    f[IM] = cimag(z);
++                }
++            }
++        }
++        free(pend);
++        st->rsc = ahn_alloc(C * sizeof(double));
++        if (fwd_tan_init(&st->pc, 1, NULL, st->rsc)) {
++            ahn_free_aligned(st->rsc);
++            st->rsc = NULL;
++        }
++    }
+ 
+     // compressed weights
+     uint64_t b = UINT64_MAX;
+@@ -597,6 +746,8 @@ static void neon_free(ahn_ctx *ctx) {
+     nplan_free(&st->pr);
+     nplan_free(&st->pc);
+     ahn_free_aligned(st->t4);
++    ahn_free_aligned(st->t4f);
++    ahn_free_aligned(st->rsc);
+     ahn_free_aligned(st->A);
+     ahn_free_aligned(st->IA);
+     ahn_free_aligned(st->mask);
+@@ -630,6 +781,10 @@ static inline int sme_stage(const neon_state *st, const stage *s) {
+ static void group_fwd(neon_state *st, double *d, uint32_t g) {
+     double *base = (double *)((char *)d + g * 128);
+     ptrdiff_t delta = (char *)st->t4 - (char *)d;
++    if (st->pr.fwdtan) {
++        plan_fwd_tan(&st->pr, 1, base, st->rowstride, 4, (char *)st->t4f - (char *)d, 1);
++        return;
++    }
+     if (!st->sme) {
+         plan_fwd(&st->pr, 1, base, st->rowstride, 4, 1, delta);
+         return;
+@@ -984,6 +1139,14 @@ static void split_special_c(neon_state *st, double *s, const double *y, uint32_t
+     (void)p0;
+ }
+ 
++// Multiply both lanes of the pair scratch by the row plan's pending scales,
++// for the paths that need true values (the special pair, multiplication).
++static void apply_rsc(const neon_state *st, double *s) {
++    for (uint32_t q = 0; q < st->C; q++) {
++        for (int k = 0; k < 4; k++) s[4 * q + k] *= st->rsc[q];
++    }
++}
++
+ static void pass2_job(void *arg, int t, int n) {
+     neon_state *st = arg;
+     uint32_t C = st->C;
+@@ -998,22 +1161,30 @@ static void pass2_job(void *arg, int t, int n) {
+         double *rpp = (double *)((char *)d + pp * st->rowstride);
+         // first stage fused with the transpose, then the rest of the row FFT
+         const stage *s0 = &st->pc.st[0];
+-        ahn_dif_r4_rows(rp, rpp, s, C, s0->tw);
++        int ft = st->pc.fwdtan;
++        if (ft) ahn_dif_r4_rows_notw(rp, rpp, s, C, NULL);
++        else ahn_dif_r4_rows(rp, rpp, s, C, s0->tw);
+         PROF_MARK(t, PR_P2_IN);
+-        for (uint32_t k = 1; k < st->pc.nst; k++) {
+-            const stage *sk = &st->pc.st[k];
+-            size_t bs = (size_t)sk->s * sk->p * 32;
+-            if (sk->s == 1) sk->notw_f[0](s, 32, 1, sk->nblocks, bs, 1, NULL);
+-            else sk->tw_f[0](s, 32, 1, sk->nblocks, bs, sk->s, sk->tw);
++        if (ft) {
++            plan_fwd_tan(&st->pc, 0, s, 32, 1, 0, 0);
++        } else {
++            for (uint32_t k = 1; k < st->pc.nst; k++) {
++                const stage *sk = &st->pc.st[k];
++                size_t bs = (size_t)sk->s * sk->p * 32;
++                if (sk->s == 1) sk->notw_f[0](s, 32, 1, sk->nblocks, bs, 1, NULL);
++                else sk->tw_f[0](s, 32, 1, sk->nblocks, bs, sk->s, sk->tw);
++            }
+         }
+         PROF_MARK(t, PR_P2_FWD);
+         const double *y = st->mul ? st->yscr + (size_t)i * 4 * C : NULL;
++        if (ft && (i == 0 || y)) apply_rsc(st, s);
+         if (i == 0) {
+             split_special_c(st, s, y, p, pp);
+             PROF_MARK(t, PR_P2_SPEC);
+         } else if (!y) {
+             double rs[4] = {st->rs[2 * p], st->rs[2 * pp], st->rs[2 * p + 1], st->rs[2 * pp + 1]};
+-            ahn_split_sq(s, C, rs, st->cs);
++            if (ft) ahn_split_sq_s(s, C, rs, st->cs, st->rsc);
++            else ahn_split_sq(s, C, rs, st->cs);
+         } else {
+             split_pair_c(st, s, y, p, pp);
+         }
+@@ -1042,7 +1213,12 @@ static void prep_job(void *arg, int t, int n) {
+         double *s = st->yscr + (size_t)i * 4 * C;
+         ahn_rows_in((double *)((char *)st->d + p * st->rowstride),
+                     (double *)((char *)st->d + pp * st->rowstride), s, C);
+-        plan_fwd(&st->pc, 0, s, 32, 1, 0, 0);
++        if (st->pc.fwdtan) {
++            plan_fwd_tan(&st->pc, 0, s, 32, 1, 0, 1);
++            apply_rsc(st, s);
++        } else {
++            plan_fwd(&st->pc, 0, s, 32, 1, 0, 0);
++        }
+     }
+ }
+ 
