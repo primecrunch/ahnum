@@ -122,9 +122,19 @@ static void set_fns(stage *s) {
 #undef CASE
 }
 
-static int nplan_init(nplan *pl, uint32_t n) {
+// first4: start with a radix-4 stage (the row FFT fuses it with the transpose)
+static int nplan_init(nplan *pl, uint32_t n, int first4) {
     uint8_t radix[32];
-    int m = factorize(n, radix);
+    int m;
+    if (first4) {
+        if (n % 4) return -1;
+        m = factorize(n / 4, radix + 1);
+        if (m < 0) return -1;
+        radix[0] = 4;
+        m += 1;
+    } else {
+        m = factorize(n, radix);
+    }
     if (m < 1) return -1;
     pl->n = n;
     pl->nst = (uint32_t)m;
@@ -297,7 +307,7 @@ static int neon_init_impl(ahn_ctx *ctx, int sme) {
     st->ngroups = C / G;
     if (ctx->L - ctx->top_t > 2 * G) return -1;
     st->rowstride = (size_t)C * 16 + 128;
-    if (nplan_init(&st->pr, R) || nplan_init(&st->pc, C)) return -1;
+    if (nplan_init(&st->pr, R, 0) || nplan_init(&st->pc, C, 1)) return -1;
     for (uint32_t q = 0; q < C; q++) {
         if (st->pc.pos[C - 1 - st->pc.rev[q]] != C - 1 - q) return -1;
     }
@@ -824,8 +834,15 @@ static void pass2_job(void *arg, int t, int n) {
         uint32_t p = st->pairs[i][0], pp = st->pairs[i][1];
         double *rp = (double *)((char *)d + p * st->rowstride);
         double *rpp = (double *)((char *)d + pp * st->rowstride);
-        ahn_rows_in(rp, rpp, s, C);
-        plan_fwd(&st->pc, 0, s, 32, 1, 0, 0);
+        // first stage fused with the transpose, then the rest of the row FFT
+        const stage *s0 = &st->pc.st[0];
+        ahn_dif_r4_rows(rp, rpp, s, C, s0->tw);
+        for (uint32_t k = 1; k < st->pc.nst; k++) {
+            const stage *sk = &st->pc.st[k];
+            size_t bs = (size_t)sk->s * sk->p * 32;
+            if (sk->s == 1) sk->notw_f[0](s, 32, 1, sk->nblocks, bs, 1, NULL);
+            else sk->tw_f[0](s, 32, 1, sk->nblocks, bs, sk->s, sk->tw);
+        }
         const double *y = st->mul ? st->yscr + (size_t)i * 4 * C : NULL;
         if (i == 0) {
             split_special_c(st, s, y, p, pp);
@@ -835,8 +852,13 @@ static void pass2_job(void *arg, int t, int n) {
         } else {
             split_pair_c(st, s, y, p, pp);
         }
-        plan_inv(&st->pc, 0, s, 32, 1, 0, 0);
-        ahn_rows_out(rp, rpp, s, C);
+        for (uint32_t k = st->pc.nst; k-- > 1;) {
+            const stage *sk = &st->pc.st[k];
+            size_t bs = (size_t)sk->s * sk->p * 32;
+            if (sk->s == 1) sk->dit_notw[0](s, 32, 1, sk->nblocks, bs, 1, NULL);
+            else sk->dit_tw[0](s, 32, 1, sk->nblocks, bs, sk->s, sk->tw);
+        }
+        ahn_dit_r4_rows(rp, rpp, s, C, s0->tw);
     }
 }
 

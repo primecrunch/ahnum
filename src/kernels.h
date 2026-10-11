@@ -60,6 +60,9 @@ void ahn_sme_r8(double *base, size_t estride, size_t nblocks, size_t bstride, si
                 const double *mats);
 void ahn_cmul_b(double *base, size_t estride, size_t n, ptrdiff_t delta);
 void ahn_cmulc_b(double *base, size_t estride, size_t n, ptrdiff_t delta);
+// First/last row-FFT stage (radix 4, s = C/4) fused with the row-pair transpose.
+void ahn_dif_r4_rows(const double *rp, const double *rpp, double *scr, size_t C, const double *tw);
+void ahn_dit_r4_rows(double *rp, double *rpp, const double *scr, size_t C, const double *tw);
 void ahn_split_sq(double *scr, size_t C, const double *rs, const double *cs);
 
 #endif

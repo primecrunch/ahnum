@@ -687,6 +687,113 @@ def gen_rows(g):
     E("ret")
 
 
+def gen_rows_stage(g, direction):
+    """First row-FFT stage fused with the row-pair transpose (pass 2).
+
+    void ahn_dif_r4_rows(const double *rp, const double *rpp, double *scr, size_t C,
+                         const double *tw)
+        Radix-4 DIF stage with s = C/4 reading rows p and p' (layout b) and
+        writing the pair scratch (layout a): equivalent to ahn_rows_in followed
+        by ahn_dif_r4 on the scratch.
+    void ahn_dit_r4_rows(double *rp, double *rpp, const double *scr, size_t C,
+                         const double *tw)
+        The matching last inverse stage: ahn_dit_r4 on the scratch followed by
+        ahn_rows_out.
+    tw: the stage's twiddle table (3 packed complex per j). Butterflies j and
+    j+1 are processed together, so one 16-byte row load covers both columns.
+    C must be a multiple of 8.
+    """
+    E = g.emit
+    name = "%s%s_r4_rows" % (PREFIX, direction)
+    fwd = direction == "dif"
+    g.out.append("")
+    g.out.append(".globl %s" % name)
+    g.out.append(".p2align 5")
+    g.label(name)
+    g.out.append(SAVE)
+    E("lsr x5, x3, #2")       # s = C/4
+    E("mov x6, #0")           # j
+    twregs = [26, 27, 28, 29, 30, 31]
+    g.label("1")
+    for i, r in enumerate(twregs):
+        E("ldr q%d, [x4], #16" % r)
+    # row offsets of q_t = j + t*s: off = q*8 + (q>>3)*64 ; scratch offset q*32
+    for t in range(4):
+        E("madd x%d, x5, x%d, x6" % (9 + t, 19 + 0, ) if False else "mov x16, #%d" % t)
+        E("madd x%d, x5, x16, x6" % (9 + t))          # q_t
+    R = Regs([r for r in range(26)])
+    f = Fft(g, R, -1 if fwd else 1)
+    A, B = [], []
+    for t in range(4):
+        qreg = "x%d" % (9 + t)
+        E("lsr x17, %s, #3" % qreg)
+        E("lsl x17, x17, #6")
+        E("add x17, x17, %s, lsl #3" % qreg)         # row byte offset
+        E("lsl x%d, %s, #5" % (19 + t, qreg))         # scratch byte offset
+        if fwd:
+            rp, ip, rq, iq = R.get(), R.get(), R.get(), R.get()
+            E("add x15, x0, x17")
+            E("ldr q%d, [x15]" % rp)
+            E("ldr q%d, [x15, #64]" % ip)
+            E("add x15, x1, x17")
+            E("ldr q%d, [x15]" % rq)
+            E("ldr q%d, [x15, #64]" % iq)
+            a, b = R.cx(), R.cx()
+            E("trn1 v%d.2d, v%d.2d, v%d.2d" % (a[0], rp, rq))
+            E("trn1 v%d.2d, v%d.2d, v%d.2d" % (a[1], ip, iq))
+            E("trn2 v%d.2d, v%d.2d, v%d.2d" % (b[0], rp, rq))
+            E("trn2 v%d.2d, v%d.2d, v%d.2d" % (b[1], ip, iq))
+            for r in (rp, ip, rq, iq):
+                R.put(r)
+        else:
+            a, b = R.cx(), R.cx()
+            E("add x15, x2, x%d" % (19 + t))
+            E("ldp q%d, q%d, [x15]" % (a[0], a[1]))
+            E("ldp q%d, q%d, [x15, #32]" % (b[0], b[1]))
+            if t > 0:
+                a = cmul_tw(f, a, twregs[t - 1], conj=True)
+                b = cmul_tw(f, b, twregs[3 + t - 1], conj=True)
+        A.append(a)
+        B.append(b)
+    ya = f.dft4(A)
+    yb = f.dft4(B)
+    for t in range(4):
+        a, b = ya[t], yb[t]
+        if fwd:
+            if t > 0:
+                a = cmul_tw(f, a, twregs[t - 1], conj=False)
+                b = cmul_tw(f, b, twregs[3 + t - 1], conj=False)
+            E("add x15, x2, x%d" % (19 + t))
+            E("stp q%d, q%d, [x15]" % (a[0], a[1]))
+            E("stp q%d, q%d, [x15, #32]" % (b[0], b[1]))
+        else:
+            # recompute the row offset of q_t
+            qreg = "x%d" % (9 + t)
+            E("lsr x17, %s, #3" % qreg)
+            E("lsl x17, x17, #6")
+            E("add x17, x17, %s, lsl #3" % qreg)
+            rp, ip, rq, iq = R.get(), R.get(), R.get(), R.get()
+            E("trn1 v%d.2d, v%d.2d, v%d.2d" % (rp, a[0], b[0]))
+            E("trn1 v%d.2d, v%d.2d, v%d.2d" % (ip, a[1], b[1]))
+            E("trn2 v%d.2d, v%d.2d, v%d.2d" % (rq, a[0], b[0]))
+            E("trn2 v%d.2d, v%d.2d, v%d.2d" % (iq, a[1], b[1]))
+            E("add x15, x0, x17")
+            E("str q%d, [x15]" % rp)
+            E("str q%d, [x15, #64]" % ip)
+            E("add x15, x1, x17")
+            E("str q%d, [x15]" % rq)
+            E("str q%d, [x15, #64]" % iq)
+            for r in (rp, ip, rq, iq):
+                R.put(r)
+        R.putcx(a)
+        R.putcx(b)
+    E("add x6, x6, #2")
+    E("cmp x6, x5")
+    E("b.lo 1b")
+    g.out.append(RESTORE)
+    E("ret")
+
+
 def gen_split_sq(g):
     """void ahn_split_sq(double *scr, size_t C, const double *rs, const double *cs)
     General row pair (lanes p, p'): lane l at q pairs with lane 1-l at C-1-q.
@@ -945,6 +1052,8 @@ def main():
     g = Gen()
     gen_rows(g)
     gen_split_sq(g)
+    gen_rows_stage(g, "dif")
+    gen_rows_stage(g, "dit")
     gen_cmul_b(g, False)
     gen_cmul_b(g, True)
     write(outdir, "pass2.S", g)

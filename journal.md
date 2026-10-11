@@ -352,3 +352,40 @@ Net result: ahnum is about 4–10% ahead of prst on throughput and 5% ahead on a
 (85.7 s against 90.2 s). prst is x86_64 gwnum translated by Rosetta 2. gwnum's FFTs are hand-written AMD64
 assembly, so no native arm64 build is possible and this is the best gwnum available on Apple
 Silicon.
+
+## 16:10 — Speed-up plan, items 1 and 2a
+
+**Item 1: why a test slows by about 20–30% when 10 run at once.** Measured on 9001·2^662695−1:
+
+| Condition | ahnum µs/squaring | L1 kernel ns/butterfly |
+|---|---|---|
+| Alone | 128.1 | 4.95 |
+| 9 FP-only spinners (no memory traffic) | 136.2 (+6%) | 5.50 (+11%) |
+| 9 other ahnum tests | 153.7 (+20%) | — |
+
+The L1-resident kernel shows the all-core clock drop, about 11%. Contention for shared cache
+and memory adds about another 10%. Full 2-minute runs lose more because sustained clocks fall
+further with heat.
+
+Shrinking the footprint does not help. With 10 tests, the compressed-weight normaliser (no
+1.5 MB table) gives 334 tests/hour against 354 for the table. The likely limit is L2 bandwidth:
+each test streams about 3.9 MB per squaring, about 30 GB/s per core and 150 GB/s per 5-core
+cluster. Cutting that traffic would cost FP instructions, and the kernels are FP-bound. Little
+here is recoverable in code.
+
+**Item 2a: fuse the row-pair transpose into the row FFT.**
+- Upper bound first: skipping the transposes entirely saved 7%; skipping the split saved 9%.
+- `ahn_dif_r4_rows` and `ahn_dit_r4_rows` are the first and last row-FFT stages (radix 4,
+  s = C/4). They read or write the two rows directly and do two adjacent butterflies at once,
+  so one 16-byte load covers both columns, and `trn1`/`trn2` happen in registers.
+- The row plan now always starts with radix 4, which costs the same per bit as radix 8.
+
+Results:
+
+| FFT length | Before | After |
+|---|---|---|
+| 28672 | 74.3 µs | 67.4 µs |
+| 49152 | 132.7 µs | 120.3 µs |
+
+That is −9.3%, more than the 7% bound for the transposes alone. 9001·2^662695−1 went from
+85.7 s to 80.3 s. GMP tests, SME tests and the residue suite all pass.
