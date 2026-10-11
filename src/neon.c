@@ -267,21 +267,8 @@ static int choose_shape(uint32_t H, uint32_t *R, uint32_t *C) {
     return 0;
 }
 
-// s_j for the layout (same definition as ctx.c)
-static uint64_t s_at(const ahn_ctx *ctx, uint64_t j) {
-    uint64_t lam = (uint64_t)floor(log2((double)ctx->k) * 4294967296.0);
-    unsigned __int128 num = (unsigned __int128)j * (((unsigned __int128)ctx->n << 32) + lam);
-    unsigned __int128 den = (unsigned __int128)ctx->L << 32;
-    return (uint64_t)((num + den - 1) / den);
-}
-
-// 2^{s_j - j*T/L} computed as exactly as possible
-static double weight_at(const ahn_ctx *ctx, uint64_t j, uint64_t sj) {
-    unsigned __int128 nj = (unsigned __int128)ctx->n * j;
-    double e = (double)(int64_t)((unsigned __int128)sj * ctx->L - nj) / ctx->L -
-               (double)j * log2((double)ctx->k) / ctx->L;
-    return exp2(e);
-}
+#define s_at ahn_s_at
+#define weight_at ahn_weight
 
 static int neon_init_impl(ahn_ctx *ctx, int sme);
 static int neon_init(ahn_ctx *ctx) { return neon_init_impl(ctx, 0); }

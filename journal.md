@@ -284,3 +284,70 @@ The E-cores add 8%.
 Against the reference client's 195 s per test: if it ran one test per P-core, it would manage
 about 185 tests/hour, so ahnum is about 1.6–1.7× on throughput. That assumes the 195 s was
 measured under a comparable load, which is not known.
+
+## 14:40 — prst on the same workload, and a weight-precision bug
+
+The client's prst (x86_64 gwnum, translated by Rosetta 2), run exactly as the client does it
+(`prst "9001*2^662695-1" -d -fermat a 3`), on the quiet machine:
+
+| Concurrent tests | prst per test | prst throughput | ahnum per test | ahnum throughput |
+|---|---|---|---|---|
+| 1 | 90.2 s | — | 91.6 s | — |
+| 10 | 115.9 s | 307.6/h | 121 s | 297.5/h |
+| 14 | 152.6 s | 329.4/h | 156 s | 321/h |
+
+So the 195 s in the PrimeCrunch record was measured under load. Even translated, gwnum matched
+ahnum on one core and was about 3% ahead on throughput.
+
+The difference was FFT length: gwnum ran at 48K (49152), ahnum at 51200. At 49152 ahnum's max
+round-off reached 0.5 (outright failure), and so did the scalar reference backend. The problem
+was therefore in the arithmetic, not the NEON code.
+
+A position histogram of round-off above 0.2 was the clue: there were 10× more large errors in
+the top tenth of the words than in the bottom tenth. FFT round-off has no reason to depend on
+position; the weights do. The exponent of w_j was computed as (s_j·L − n·j)/L − j·log2(k)/L.
+Both terms grow to about log2 k ≈ 13 at the top while their difference stays in [0, 1), so double
+precision lost about 4 bits to cancellation. Weights near the top were off by a few ulp, and
+weight errors enter the convolution like extra round-off.
+
+The fix:
+- Compute log2 k as a 64-bit binary fraction by repeated squaring in fixed point.
+- Define T′ = n + log2k_fixed.
+- Derive both the digit boundaries s_j and the weight exponents from T′ as exact 128-bit integer
+  ratios.
+
+z^L = 2^T′ then differs from k·2^n by a relative 2^-64, which is below double precision.
+
+Results:
+- Max round-off at 49152 fell from 0.5 to 0.19 over 300 squarings and 0.22 over 20,000.
+- The refitted k penalty is 0.50·log2 k instead of 0.525.
+- Large k gains about 0.4 bits per word: k = 9999 at L = 65536 now allows 13.57 instead of 13.11.
+- The selection margin dropped from 0.45 to 0.2. Full runs at the new lengths had max round-off
+  0.22 or lower.
+
+Single-core full tests after the fix:
+
+| Number | FFT before → after | Time before → after |
+|---|---|---|
+| 9001·2^662695−1 | 51200 → 49152 | 91.6 s → 85.7 s |
+| 8243·2^872226−1 | 71680 → 65536 | 172.6 s → 155.3 s |
+
+## 15:55 — prst against ahnum, alternating with cool-downs
+
+After about 40 minutes of all-core runs the machine slowed: both programs lost 15–25% per test.
+Fair comparison therefore needed alternating runs with 3-minute cool-downs. 10 concurrent tests
+of 9001·2^662695−1:
+
+| Program | Time per test | Throughput |
+|---|---|---|
+| prst | 125.2 s, 126.4 s | 283 tests/hour |
+| ahnum (table normaliser) | 114.9 s, 121.4 s | 295–313 tests/hour |
+| ahnum (compressed weights) | 119.7 s, 123.1 s | 293–298 tests/hour |
+
+Two earlier ahnum runs at about 144 s per test did not recur. In those runs every test was
+equally slow, which fits a machine-wide state (heat or background work) rather than ahnum's
+memory footprint; the L2 hypothesis was ruled out. The table normaliser stays the default.
+
+Net result: ahnum is about 4–10% ahead of prst on throughput and 5% ahead on a single test
+(85.7 s against 90.2 s). The prst build is x86_64 gwnum translated by Rosetta 2, so a native
+arm64 gwnum, if one existed, would likely do better.

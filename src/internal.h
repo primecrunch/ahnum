@@ -3,7 +3,7 @@
 // Representation for N = k*2^n - 1 with an FFT of L real words (the k-scaled
 // IBDWT; k is folded into the irrational base so the weights stay in [1, 2)):
 //   T = n + log2(k),  z = 2^{T/L},  z^L = k*2^n == 1 (mod N)
-//   s_j = ceil(j*T'/L) for j = 0..L, T' a rational just below T, so
+//   s_j = ceil(j*T'/L) for j = 0..L, T' = n + log2(k) to 64 fractional bits, so
 //   s_L = n + ceil(log2 k) (s_L = n when k = 1)
 //   value V = sum_j x_j 2^{s_j}; digit j has base 2^{s_{j+1}-s_j}.
 //   After carrying, the part of V at or above 2^n (held in the top digits
@@ -35,6 +35,7 @@ struct ahn_ctx {
     uint32_t L;           // FFT length in real words
     uint32_t threads;
     uint8_t *bits;        // bits[j] = s_{j+1} - s_j
+    uint64_t lam;         // log2(k) as a 64-bit binary fraction (T' = n + lam/2^64)
     uint64_t sL;          // s_L
     uint32_t top_t;       // first digit with s_{t+1} > n (L if none)
     uint64_t top_st;      // s_t
@@ -77,6 +78,9 @@ void ahn_carry_digits(const ahn_ctx *ctx, int64_t *dig);
 uint32_t ahn_choose_fft_len(uint64_t k, uint64_t n);
 uint32_t ahn_next_fft_len(uint32_t L);
 double ahn_safe_bpw(uint32_t L, uint64_t k);
+// Layout helpers shared by the backends (exact rational arithmetic in T').
+uint64_t ahn_s_at(const ahn_ctx *ctx, uint64_t j);
+double ahn_weight(const ahn_ctx *ctx, uint64_t j, uint64_t sj);
 bool ahn_fft_len_ok(uint32_t L);
 
 void *ahn_alloc(size_t bytes);

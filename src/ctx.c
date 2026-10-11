@@ -25,11 +25,11 @@ bool ahn_fft_len_ok(uint32_t L) {
 
 // Safe average bits per word. Fitted from measured round-off (tools/fit_bpw.py:
 // max error <= 0.25 over a few hundred squarings) on the NEON backend:
-//   21.44 - 0.305*(log2 L - 12) - 0.525*log2 k
-// less a margin so that the max error over a full test stays well below 0.4.
-#define BPW_MARGIN 0.45
+//   21.44 - 0.305*(log2 L - 12) - 0.50*log2 k
+// less a margin so that the max error over a full test stays below 0.4.
+#define BPW_MARGIN 0.2
 double ahn_safe_bpw(uint32_t L, uint64_t k) {
-    return 21.44 - 0.305 * (log2((double)L) - 12) - 0.525 * log2((double)k) - BPW_MARGIN;
+    return 21.44 - 0.305 * (log2((double)L) - 12) - 0.50 * log2((double)k) - BPW_MARGIN;
 }
 
 // Measured squaring times (us) per FFT length, loaded from a tuning file with
@@ -132,32 +132,69 @@ uint32_t ahn_next_fft_len(uint32_t L) {
     return 0;
 }
 
-// s_j = ceil(j*T'/L) with T' = n + lam/2^32 <= n + log2(k).
-static uint64_t s_of(uint64_t n, uint64_t lam, uint32_t L, uint64_t j) {
-    unsigned __int128 num = (unsigned __int128)j * (((unsigned __int128)n << 32) + lam);
-    unsigned __int128 den = (unsigned __int128)L << 32;
-    return (uint64_t)((num + den - 1) / den);
+// log2(k) - floor(log2(k)) as a 64-bit binary fraction, by repeated squaring in
+// fixed point (each square yields one bit). Accurate to a few units of 2^-60,
+// far below what double weights can resolve.
+static uint64_t log2_frac64(uint64_t k) {
+    int e = 63 - __builtin_clzll(k);
+    // y in [1, 2) with 62 fractional bits
+    unsigned __int128 y = (unsigned __int128)k << (62 - e);
+    uint64_t f = 0;
+    for (int i = 0; i < 64; i++) {
+        y = (y * y) >> 62;
+        f <<= 1;
+        if (y >> 63) {  // y >= 2
+            f |= 1;
+            y >>= 1;
+        }
+    }
+    return f;
+}
+
+// T' = n + floor(log2 k) + frac/2^64. Everything (digit boundaries and weights)
+// is defined from T' with exact integer arithmetic; z^L = 2^T' differs from
+// k*2^n by a relative 2^-64, which is below double precision.
+uint64_t ahn_s_at(const ahn_ctx *ctx, uint64_t j) {
+    // s_j = ceil(j*T'/L), T'*2^64 = (n + ilog2k)*2^64 + lam
+    unsigned __int128 num = (unsigned __int128)j * ctx->lam;
+    unsigned __int128 den = (unsigned __int128)ctx->L << 64;
+    uint64_t ik = (uint64_t)(63 - __builtin_clzll(ctx->k));
+    unsigned __int128 whole = (unsigned __int128)j * (ctx->n + ik);
+    // ceil((whole*2^64 + num) / (L*2^64)) without overflowing 128 bits:
+    // whole = qa*L + ra; then ceil((ra*2^64 + num)/(L*2^64)) + qa
+    unsigned __int128 qa = whole / ctx->L, ra = whole % ctx->L;
+    unsigned __int128 top = (ra << 64) + num;
+    return (uint64_t)(qa + (top + den - 1) / den);
+}
+
+// w_j = 2^{s_j - j*T'/L}; the exponent is an exact ratio of integers.
+double ahn_weight(const ahn_ctx *ctx, uint64_t j, uint64_t sj) {
+    uint64_t ik = (uint64_t)(63 - __builtin_clzll(ctx->k));
+    unsigned __int128 whole = (unsigned __int128)j * (ctx->n + ik);
+    unsigned __int128 qa = whole / ctx->L, ra = whole % ctx->L;
+    // s_j - j*T'/L = (s_j - qa) - (ra*2^64 + j*lam) / (L*2^64)
+    unsigned __int128 num = ((unsigned __int128)(sj - qa) * ctx->L << 64) -
+                            ((ra << 64) + (unsigned __int128)j * ctx->lam);
+    // num / (L*2^64) in [0, 1): take the top 64 bits of the fraction
+    double frac = (double)(num / ctx->L) / 18446744073709551616.0;
+    return exp2(frac);
 }
 
 static int build_layout(ahn_ctx *ctx) {
     uint32_t L = ctx->L;
     uint64_t n = ctx->n, k = ctx->k;
-    double log2k = log2((double)k);
-    uint64_t lam = (uint64_t)floor(log2k * 4294967296.0);
+    ctx->lam = log2_frac64(k);
     uint64_t s = 0;
     ctx->top_t = L;
     for (uint32_t j = 0; j < L; j++) {
-        uint64_t s_next = s_of(n, lam, L, j + 1);
+        uint64_t s_next = ahn_s_at(ctx, j + 1);
         if (s_next < s || s_next - s > 40) return -1;
         ctx->bits[j] = (uint8_t)(s_next - s);
         if (s_next > n && ctx->top_t == L) {
             ctx->top_t = j;
             ctx->top_st = s;
         }
-        // w_j = 2^{s_j - j*n/L - j*log2(k)/L}; the first part is exact.
-        unsigned __int128 nj = (unsigned __int128)n * j;
-        double e = (double)(int64_t)((unsigned __int128)s * L - nj) / L - (double)j * log2k / L;
-        ctx->w[j] = exp2(e);
+        ctx->w[j] = ahn_weight(ctx, j, s);
         ctx->oscale[j] = (double)k / ctx->w[j];
         s = s_next;
     }
