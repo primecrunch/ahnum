@@ -39,11 +39,25 @@ Options: `--threads T`, `--fft L` (force a length), `--order 0..3` (force an FFT
 
 ```sh
 tools/bench.sh
-# 9001*2^662695-1  ok  91.6s  reference 195s (primecrunch fermat job on wolf (darwin/arm64))  speedup 2.12x
+# 9001*2^662695-1  ok  74.6s  reference 195s (primecrunch fermat job on wolf (darwin/arm64))  speedup 2.61x
 ```
 
 `tests/benchmarks.csv` lists numbers with known residues and reference times. The script runs
 the full Gerbicz-checked test, checks the residue, and reports the speedup.
+
+### Speed history
+
+9001·2^662695−1, full Gerbicz-checked Fermat test on a quiet M4 Pro. µs/squaring is the full
+test time divided by n. Throughput is 10 concurrent single-thread tests on the P-cores. Each row
+adds one improvement; details are in `journal.md`.
+
+| Version | Commit | FFT | One core | µs/squaring | 10-test throughput |
+|---|---|---|---|---|---|
+| prst (gwnum via Rosetta 2), for reference | — | 49152 | 90.2 s | 136 | 283–307 tests/h |
+| First NEON build | `10b8039` | 51200 | 91.6 s | 138 | 298 tests/h |
+| Exact fixed-point IBDWT weights (shorter FFT) | `9dca186` | 49152 | 85.7 s | 129 | 295–313 tests/h |
+| Row transpose fused into the row FFT | `3780a4b` | 49152 | 80.3 s | 121 | 336–340 tests/h |
+| In-place normaliser, tangent DIT twiddles, tuned stage order | `3631fc5` | 49152 | 74.6 s | 113 | 371 tests/h |
 
 ## Verified residues from primecrunch
 
