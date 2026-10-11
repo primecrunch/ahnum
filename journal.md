@@ -906,3 +906,52 @@ Cost model update for 9001·2^662695−1 (4 primes at 32768, plus a guessed ~15 
 the unbuilt parts): ~30 µs per squaring on an idle GPU. Alongside 13 CPU tests at the measured
 −22% CPU cost (if the GPU's slowdown under CPU load stays ~10%), that is ~330 CPU + ~170 GPU ≈
 500 tests/hour, about +13% over the CPU alone (442), up from ~+7%.
+
+## 22:20 — Full GPU squaring mod k·2^n−1: correct, 30.6 µs per squaring
+
+`gpu/gpu_sq.m` plus `gpu/sq.metal` (appended to `ntt_reg.metal`). A complete squaring step on
+the GPU for B numbers at once, with no CPU work between squarings:
+1. `to_res`: 45-bit words → residues mod four NTT primes (15·2^27+1, 27·2^26+1, 7·2^26+1,
+   45·2^24+1), zero-padded to 32768.
+2. Four NTT squarings: register kernels with Shoup twiddles, three dispatches each.
+3. `crt_split`: Garner CRT to a 128-bit coefficient (< 2^104), split into three 45-bit parts.
+4. `carry`: product words.
+5. `redc` and `fold`.
+
+**The reduction mod N = k·2^n−1.** Numbers are kept in Montgomery form with R = 2^n. Since
+N ≡ −1 (mod 2^n), Montgomery reduction of a product P = A + B·2^n (A < 2^n) is just
+P·2^−n ≡ **B + k·A** (mod N): a word-parallel multiply by the small k plus an add, no division.
+The result can reach 2^(n+29) and the input to the next square must stay bounded, so a
+one-thread fold takes T = bits above n, writes T = q·k + r, and replaces T·2^n by
+q + r·2^n (since k·2^n ≡ 1). That keeps values under 2^(n+14). The squaring step is therefore
+x → x²·2^−n ≡ x²·k (mod N), which the check reproduces on the CPU with ahnum
+(`ahn_square`, then `ahn_mul_small(k)`).
+
+**Results.** Correct on the first run at 3·2^20000−1, and at 9001·2^662695−1 after 20 squarings
+(14,728 words, NP = 32768, no carry overflows). Throughput: 30.6 µs per squaring with 32 or 128
+numbers in flight; sustained 31.4 µs, so ~20 s of GPU time per test and 173 tests/hour from
+the GPU alone. The earlier estimate (4 × 3.83 µs NTT + ~15 µs other) was close: the CRT, carries
+and reduction cost about as much as the four NTTs.
+
+Not handled yet: a carry that ripples past one word (counted, never seen in testing), Gerbicz
+checks, and checkpoints.
+
+## 22:26 — CPU + GPU together: +22% throughput
+
+9001·2^662695−1, frozen binaries, `ahbench throughput` 30 s, full GPU squaring (`gpu_sq`, 64 in
+flight) running alongside, 90 s cool-downs:
+
+| Run | CPU tests/hour | GPU tests/hour | Total |
+|---|---|---|---|
+| 14 CPU tests alone | 455.7 | — | 455.7 |
+| 13 CPU tests + GPU | 382.1 | 174 (31.3 µs, 99% busy) | 556 (+22%) |
+| 14 CPU tests + GPU | 374.2 | 158 (34.3 µs, 92% busy) | 532 (+17%) |
+
+Leaving one core for the GPU's feeder thread is better: with 14 CPU tests the feeder is
+starved and the GPU drops to 92% busy. This went better than the NTT-only prototype predicted,
+which cut the CPU by ~22% at full GPU load. With the full squaring kernel the CPU loses ~10%
+(382 against ~423 for 13 tests alone, measured earlier this evening), and the GPU loses nothing.
+The full squaring spends half its time in the CRT, carry and reduction kernels, and those
+presumably draw less power than the NTT. This is a measured throughput rate, not full tests:
+the GPU path still lacks Gerbicz checks, checkpoints and handling for a carry rippling past one
+word.

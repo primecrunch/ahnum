@@ -17,15 +17,15 @@ pass-2 forward and inverse stages ~11–12% each, split 10%, row transposes in/o
    loading the rows, not by FP: dropping its twiddle multiplies (56 → 32 ops) did not change
    its time.
 
-2. **Integer NTT on the GPU, alongside the CPU tests (research, prototype in `gpu/`).** Best
-   kernel so far: register-based (16 elements per thread, two exchanges per row) with Shoup
-   twiddle multiplies, `AHN_GPU_REG=1 AHN_GPU_SHOUP=1`: 3.83 µs per squaring mod one prime at
-   N = 32768 (radix-2 start: 5.55). 9001·2^662695−1 needs ~4 primes at 32768. The CPU loses
-   throughput in proportion to GPU busy time (−22% at full load, shared power). Estimated
-   CPU + GPU: ~+13% over CPU alone, assuming ~15 µs per squaring for the unbuilt
-   prime-combining, carries and reduction. Limits now: the integer complex pipe (`mulhi`), and
-   register spills at 16 elements per thread (occupancy 31%). Stockham radix-8 (8 per thread)
-   was slower, capped by threadgroup memory.
+2. **GPU squaring alongside the CPU tests (prototype in `gpu/`, measured +22%).** A complete
+   squaring mod k·2^n−1 runs on the GPU (`gpu/gpu_sq.m`): residues mod 4 primes, four NTT
+   squarings (register kernels, Shoup twiddles), Garner CRT, carries, and Montgomery reduction
+   with R = 2^n (P·2^−n = B + k·A). It matches ahnum's CPU result and takes 30.6 µs per
+   squaring of GPU throughput (173 tests/hour alone). 13 CPU tests + GPU give 556 tests/hour
+   against 456 for 14 CPU tests alone. To make it usable for real tests: Gerbicz checks,
+   checkpoints, multi-word carry ripples, the PRP driver loop on the GPU, and lengths other
+   than 32768. Kernel headroom remains: register spills (occupancy 31%), and the non-NTT
+   kernels take half the time and have not been tuned.
 
 ## Done
 

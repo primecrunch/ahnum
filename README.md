@@ -59,6 +59,10 @@ adds one improvement; details are in `journal.md`.
 | Row transpose fused into the row FFT | `3780a4b` | 49152 | 80.3 s | 121 | 336–340 tests/h |
 | In-place normaliser, tangent DIT twiddles, tuned stage order | `3631fc5` | 49152 | 74.6 s | 113 | 371 tests/h |
 
+GPU prototype (`gpu/`, not yet a full test): running squarings on the GPU alongside 13 CPU tests
+gives 556 tests/hour, against 456 for 14 CPU tests alone (+22%), measured as squaring rates with
+`ahbench throughput` and `gpu_sq`. See the Measured section below.
+
 ## Verified residues from primecrunch
 
 ```sh
@@ -142,10 +146,18 @@ and fixes it up with the previous range's carries.
 | 9357·2^369717−1 | 26880 | 1 thread | 64.3 µs | 24 s |
 | 9001·2^662695−1 | 49152 | 1 thread | 113 µs | 74.6 s |
 | 9001·2^662695−1 | 49152 | 10 tests × 1 thread | — | 371 tests/hour (97 s each) |
+| 9001·2^662695−1 | 49152 | 14 tests × 1 thread (P+E)\* | 167 µs each | 456 tests/hour |
+| 9001·2^662695−1 | 49152 CPU, 32768 NTT on GPU | 13 tests × 1 thread + GPU prototype\* | CPU 185 µs each, GPU 31.3 µs | 556 tests/hour (382 CPU + 174 GPU) |
+| 9001·2^662695−1 | 32768 NTT on GPU | GPU prototype alone, 64 numbers in flight\* | 30.6 µs | 173 tests/hour |
 | 9357·2^369717−1 | 26880 | 10 tests × 1 thread | 74 µs each | 1314 tests/hour |
 | 9357·2^369717−1 | 26880 | 14 tests × 1 thread (P+E) | 97 µs each | 1405 tests/hour |
 | 69·2^24612729−1 | 1638400 | 1 thread | 6.5 ms | 45 h |
 | 69·2^24612729−1 | 1638400 | 10 threads | 0.77 ms | 5.3 h |
+
+\* Squaring rates from `ahbench throughput` and `gpu/gpu_sq.m` (30–40 s samples), not complete tests;
+full runs come out ~10% lower than squaring-rate samples. The GPU path (`gpu/`) is a prototype:
+a complete squaring mod k·2^n−1 (4-prime integer NTT, Garner CRT, Montgomery reduction with
+R = 2^n), checked against the CPU, but without Gerbicz checks or checkpoints yet.
 
 At n ≈ 370K, splitting a test across threads loses throughput (5×2 gives 892 tests/hour, 1×10
 gives 510), so run one test per core. For record sizes, run one test across all P-cores.
