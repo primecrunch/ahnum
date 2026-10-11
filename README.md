@@ -9,7 +9,7 @@ thin C layer handles setup, threading, error checking and the API.
 ```sh
 cmake -S . -B build && cmake --build build -j
 cd build && ctest -LE long        # quick suite (GMP comparisons, asm kernel tests, known residues)
-ctest -L long                     # adds 9357*2^369717-1 (PrimeCrunch residue)
+ctest -L long                     # adds 9357*2^369717-1 (primecrunch residue)
 ```
 
 GMP (Homebrew) is needed only for the tests and `gmp_ref`.
@@ -27,7 +27,7 @@ build/ahbench throughput 9357 369717 --configs 10x1,5x2,2x5 # tests x threads sp
 build/ahbench tune 8192 196608 --out ~/.ahnum/fft_times.txt # measure FFT lengths
 ```
 
-RES64 is the low 64 bits of 3^(N−1) mod N in upper-case hex (PrimeCrunch convention). A PRP has
+RES64 is the low 64 bits of 3^(N−1) mod N in upper-case hex (primecrunch convention). A PRP has
 RES64 `0000000000000001`. `--expect` makes the exit status reflect the comparison.
 
 Options: `--threads T`, `--fft L` (force a length), `--backend neon|c2p|ref`, `--base B`,
@@ -38,13 +38,13 @@ Options: `--threads T`, `--fft L` (force a length), `--backend neon|c2p|ref`, `-
 
 ```sh
 tools/bench.sh
-# 9001*2^662695-1  ok  91.6s  reference 195s (PrimeCrunch fermat job on wolf (darwin/arm64))  speedup 2.12x
+# 9001*2^662695-1  ok  91.6s  reference 195s (primecrunch fermat job on wolf (darwin/arm64))  speedup 2.12x
 ```
 
 `tests/benchmarks.csv` lists numbers with known residues and reference times. The script runs
 the full Gerbicz-checked test, checks the residue, and reports the speedup.
 
-## Verified residues from PrimeCrunch
+## Verified residues from primecrunch
 
 ```sh
 tools/primecrunch_fetch.py 9357:369717                       # print k,n,res64,source
@@ -53,7 +53,7 @@ tests/run_known.sh build/ahbench tests/known_residues.csv 1000000
 ```
 
 The fetcher uses the public `GET /v2/k/{k}/n/{n}` on `https://api.primecrunch.com` and uses
-completed `fermat` jobs only. The `servers` entry in the PrimeCrunch OpenAPI spec
+completed `fermat` jobs only. The `servers` entry in the primecrunch OpenAPI spec
 (`https://primecrunch.com`) serves the web app, not the API.
 
 ## Library API (`include/ahnum.h`)
@@ -131,7 +131,7 @@ gives 510), so run one test per core. For record sizes, run one test across all 
 
 `--backend sme` runs the pass-1 radix-8 column stages on the SME unit. Each stage becomes 8×8
 complex matrix products (FP64 FMOPA), with the twiddles folded into per-j matrices
-(`ahn_sme_r8`). It is correct (GMP and PrimeCrunch tests pass), but it is slower end to end:
+(`ahn_sme_r8`). It is correct (GMP and primecrunch tests pass), but it is slower end to end:
 
 - The FMOPA rate is 492 GFLOPS from one core. A radix-8 stage needs 32 outer products per
   8-point × 8-lane item, which gives 0.85 cycles/point against 1.3 for NEON in isolation.

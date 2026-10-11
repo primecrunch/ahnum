@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fetch verified Fermat RES64 residues from the primecrunch API for regression tests.
 
-Uses the public GET /v2/k/{k}/n/{n} of the PrimeCrunch v2 API. The API host is
+Uses the public GET /v2/k/{k}/n/{n} of the primecrunch v2 API. The API host is
 api.primecrunch.com; the spec's `servers` entry (primecrunch.com) serves the web app.
 
 Only completed `fermat` jobs with a residual are used (LLR residues are a different

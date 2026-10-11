@@ -14,14 +14,14 @@ Decisions from the planning questions:
 - The hot code is assembly. C, C++ or Rust were ruled out because the AMD64 state of the art
   (gwnum) is hand-written assembly. Here a Python generator emits AArch64 assembly, and thin C
   handles setup, threads and the API.
-- Gerbicz plus round-off checking. Verified residues come from the PrimeCrunch API.
+- Gerbicz plus round-off checking. Verified residues come from the primecrunch API.
 - Throughput matters most. The tests × threads split has to be measured per FFT size.
 
 ## 10:48 — Pinning the residue convention
 
 There are several plausible "Fermat residue" definitions: 3^(N−1), 3^(N+1), the half
 exponents, and so on. A GMP oracle printing all of them took 38 minutes for one 370K-bit
-number. The project's own first FFT finished sooner, and it showed that PrimeCrunch's
+number. The project's own first FFT finished sooner, and it showed that primecrunch's
 `F5FDA01218F20439` for 9357·2^369717−1 is the low 64 bits of 3^(N−1) mod N.
 
 ## 10:55 — Scalar reference IBDWT
@@ -145,7 +145,7 @@ SME. The unit is shared per cluster.
 - The automatic backend fell back to the scalar reference for tiny n but freed state that had
   never been allocated.
 
-## 12:35 — PrimeCrunch residues
+## 12:35 — primecrunch residues
 
 The API is served from `https://api.primecrunch.com`. The OpenAPI `servers` entry,
 `https://primecrunch.com`, returns the web app's HTML for `/v2/...`.
@@ -156,7 +156,7 @@ because LLR residues are a different quantity. No endpoint lists candidates, so
 return 404.
 
 From n = 369500…369699, 13 residues for k = 9357 were fetched, and ahbench matched all 13
-(10 tests in parallel). The PrimeCrunch record for 9357·2^369717−1 shows the original result
+(10 tests in parallel). The primecrunch record for 9357·2^369717−1 shows the original result
 came from a darwin/amd64 client in 30 s. ahnum runs it natively in 26 s on one P-core with
 Gerbicz checking.
 
@@ -256,7 +256,7 @@ The number is a known prime, so it was added to `tests/known_residues.csv` as a 
 
 ## 13:20 — Reference benchmark: 9001·2^662695−1
 
-PrimeCrunch records this known prime's Fermat job at 195 s on wolf (this M4 Pro, darwin/arm64
+primecrunch records this known prime's Fermat job at 195 s on wolf (this M4 Pro, darwin/arm64
 client); its LLR proof took 407 s. ahnum on one quiet P-core: 91.5 s (138 µs/iter, FFT 51200,
 12.94 bits/word, max round-off 0.31, no Gerbicz errors), 2.13× faster than the reference. It
 is now the reference benchmark (`tests/benchmarks.csv`, `tools/bench.sh`).
@@ -296,7 +296,7 @@ The client's prst (x86_64 gwnum, translated by Rosetta 2), run exactly as the cl
 | 10 | 115.9 s | 307.6/h | 121 s | 297.5/h |
 | 14 | 152.6 s | 329.4/h | 156 s | 321/h |
 
-So the 195 s in the PrimeCrunch record was measured under load. Even translated, gwnum matched
+So the 195 s in the primecrunch record was measured under load. Even translated, gwnum matched
 ahnum on one core and was about 3% ahead on throughput.
 
 The difference was FFT length: gwnum ran at 48K (49152), ahnum at 51200. At 49152 ahnum's max

@@ -2,7 +2,7 @@
 // Usage: gmp_ref k n [base] [c] [--all]
 // Prints the low 64 bits of base^(N-1) mod N as upper-case hex.
 // --all also prints candidate alternative conventions (used to pin down the
-// PrimeCrunch res64 definition).
+// primecrunch res64 definition).
 #include <gmp.h>
 #include <inttypes.h>
 #include <stdio.h>

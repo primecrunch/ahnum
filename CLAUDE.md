@@ -16,6 +16,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Avoid announcing that you are about to disagree: "I have to push back on", "pushing back on", "let me challenge that", "with respect", and similar. Don't narrate the disagreement, just state the correction and the evidence for it.
 - Never use "quietly" as an adverb ("quietly lying", "quietly became", "quietly rots", "quietly assumes"). It is filler that gestures at something being hidden without saying who could not see it or why. Name the missed signal instead: not "the flag is quietly lying to you" but "the flag says one thing, the machine does another, and nothing on screen tells you which".
 - Avoid personifying systems with an admiring flourish: "quietly doing its job", "doing the heavy lifting", "working away in the background", "earning its keep", "the unsung hero", and similar. A system does not deserve credit and cannot be modest. Say what it does and what it costs.
+- 'primecrunch' is always all lowercase.
 
 
 ## History and Blog
