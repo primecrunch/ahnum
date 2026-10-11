@@ -253,3 +253,13 @@ On the quiet machine, NEON, FFT 71680 (12.17 bits/word):
 | 1 test × 10 threads | 41 µs | 101 tests/hour, but one test takes about 36 s |
 
 The number is a known prime, so it was added to `tests/known_residues.csv` as a PRP check.
+
+## 13:20 — Reference benchmark: 9001·2^662695−1
+
+PrimeCrunch records this known prime's Fermat job at 195 s on wolf (this M4 Pro, darwin/arm64
+client); its LLR proof took 407 s. ahnum on one quiet P-core: 91.5 s (138 µs/iter, FFT 51200,
+12.94 bits/word, max round-off 0.31, no Gerbicz errors), 2.13× faster than the reference. It
+is now the reference benchmark (`tests/benchmarks.csv`, `tools/bench.sh`).
+
+The 195 s comes from the distributed client, which may have been sharing the machine with other
+work at the time, so it is an upper bound rather than a quiet single-core figure.

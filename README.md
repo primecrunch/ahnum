@@ -34,6 +34,16 @@ Options: `--threads T`, `--fft L` (force a length), `--backend neon|c2p|ref`, `-
 `--ckpt FILE` / `--ckpt-secs S` (checkpoint/resume), `--block B` (Gerbicz block),
 `--fault ITER` (inject a digit error to exercise the Gerbicz check).
 
+## Reference benchmark
+
+```sh
+tools/bench.sh
+# 9001*2^662695-1  ok  91.6s  reference 195s (PrimeCrunch fermat job on wolf (darwin/arm64))  speedup 2.12x
+```
+
+`tests/benchmarks.csv` lists numbers with known residues and reference times. The script runs
+the full Gerbicz-checked test, checks the residue, and reports the speedup.
+
 ## Verified residues from PrimeCrunch
 
 ```sh
