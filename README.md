@@ -53,7 +53,7 @@ tests/run_known.sh build/ahbench tests/known_residues.csv 1000000
 ```
 
 The fetcher uses the public `GET /v2/k/{k}/n/{n}` on `https://api.primecrunch.com` and uses
-completed `fermat` jobs only. The `servers` entry in `docs/primecrunch-openapi.yaml`
+completed `fermat` jobs only. The `servers` entry in the PrimeCrunch OpenAPI spec
 (`https://primecrunch.com`) serves the web app, not the API.
 
 ## Library API (`include/ahnum.h`)
