@@ -17,18 +17,15 @@ pass-2 forward and inverse stages ~11–12% each, split 10%, row transposes in/o
    loading the rows, not by FP: dropping its twiddle multiplies (56 → 32 ops) did not change
    its time.
 
-2. **Integer NTT on the GPU, alongside the CPU tests (research, prototype in `gpu/`).** A naive
-   radix-2 Metal NTT squaring mod one 31-bit prime takes 5.4–5.7 µs at N = 32768 (checked
-   against a direct cyclic square). 9001·2^662695−1 needs ~4 primes at 32768 (45-bit words,
-   zero-padded, exact). The CPU loses throughput in proportion to GPU busy time (−7.4% at half
-   load, −22% at full; shared power), so CPU + GPU comes to ~+6–7% over CPU alone, assuming
-   ~15 µs per squaring for the unbuilt prime-combining, carries and reduction. The lever is GPU
-   kernel efficiency: half the GPU time per squaring would make it ~+25%. Ruled out as the
-   kernel's limit: barriers (fused radix-2² stages), integer multiplies (Shoup: 2× slower),
-   twiddle loads (threadgroup-memory twiddles: no change). GPU counters show it is
-   latency-bound (instruction utilization 21% against a 75% limiter, integer pipes ~40%,
-   threadgroup memory 709 GiB/s each way). Next: register-based kernels, 8–16 elements per
-   thread with radix-8/16 sub-transforms and 2–3 threadgroup exchanges per transform.
+2. **Integer NTT on the GPU, alongside the CPU tests (research, prototype in `gpu/`).** Best
+   kernel so far: register-based (16 elements per thread, two exchanges per row) with Shoup
+   twiddle multiplies, `AHN_GPU_REG=1 AHN_GPU_SHOUP=1`: 3.83 µs per squaring mod one prime at
+   N = 32768 (radix-2 start: 5.55). 9001·2^662695−1 needs ~4 primes at 32768. The CPU loses
+   throughput in proportion to GPU busy time (−22% at full load, shared power). Estimated
+   CPU + GPU: ~+13% over CPU alone, assuming ~15 µs per squaring for the unbuilt
+   prime-combining, carries and reduction. Limits now: the integer complex pipe (`mulhi`), and
+   register spills at 16 elements per thread (occupancy 31%). Stockham radix-8 (8 per thread)
+   was slower, capped by threadgroup memory.
 
 ## Done
 

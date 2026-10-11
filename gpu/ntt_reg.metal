@@ -28,6 +28,20 @@ static inline uint mmul(uint a, uint b, uint p, uint pinv) {
     uint r = hi + mulhi(m, p) + (lo != 0 ? 1u : 0u);
     return r >= p ? r - p : r;
 }
+// Twiddle multiply: with SHOUP, tables hold (w, floor(w * 2^32 / p)) pairs
+// (one mulhi instead of Montgomery's two); otherwise Montgomery w * 2^32 mod p.
+#ifdef SHOUP
+typedef uint2 tw_t;
+static inline uint twmul(uint x, uint2 w, uint p, uint pinv) {
+    uint q = mulhi(x, w.y);
+    uint r = x * w.x - q * p;
+    return r >= p ? r - p : r;
+}
+#else
+typedef uint tw_t;
+static inline uint twmul(uint x, uint w, uint p, uint pinv) { return mmul(x, w, p, pinv); }
+#endif
+
 static inline uint madd(uint a, uint b, uint p) {
     uint r = a + b;
     return r >= p ? r - p : r;
@@ -39,7 +53,7 @@ static inline uint msub(uint a, uint b, uint p) {
 // In-register DIF of length L on x[0..L-1]: natural in, bit-reversed out.
 // T is a table of w_M^i, so w_L^e = T[e * (M / L)].
 template <uint L>
-static inline void dif_reg(thread uint *x, constant uint *T, uint M, constant Params &P) {
+static inline void dif_reg(thread uint *x, constant tw_t *T, uint M, constant Params &P) {
 #pragma clang loop unroll(full)
     for (uint h = L / 2; h >= 1; h >>= 1) {
 #pragma clang loop unroll(full)
@@ -48,21 +62,21 @@ static inline void dif_reg(thread uint *x, constant uint *T, uint M, constant Pa
             uint i0 = blk * 2 * h + j, i1 = i0 + h;
             uint u = x[i0], v = x[i1];
             x[i0] = madd(u, v, P.p);
-            x[i1] = mmul(msub(u, v, P.p), T[j * (L / (2 * h)) * (M / L)], P.p, P.pinv);
+            x[i1] = twmul(msub(u, v, P.p), T[j * (L / (2 * h)) * (M / L)], P.p, P.pinv);
         }
     }
 }
 
 // In-register DIT of length L: bit-reversed in, natural out; T holds w_M^-i.
 template <uint L>
-static inline void dit_reg(thread uint *x, constant uint *T, uint M, constant Params &P) {
+static inline void dit_reg(thread uint *x, constant tw_t *T, uint M, constant Params &P) {
 #pragma clang loop unroll(full)
     for (uint h = 1; h <= L / 2; h <<= 1) {
 #pragma clang loop unroll(full)
         for (uint i = 0; i < L / 2; i++) {
             uint blk = i / h, j = i % h;
             uint i0 = blk * 2 * h + j, i1 = i0 + h;
-            uint u = x[i0], v = mmul(x[i1], T[j * (L / (2 * h)) * (M / L)], P.p, P.pinv);
+            uint u = x[i0], v = twmul(x[i1], T[j * (L / (2 * h)) * (M / L)], P.p, P.pinv);
             x[i0] = madd(u, v, P.p);
             x[i1] = msub(u, v, P.p);
         }
@@ -73,8 +87,8 @@ static inline uint brev(uint x, uint L) { return reverse_bits(x) >> (32 - ctz(L)
 
 // One threadgroup per (test, G columns); AR threads per column, thread
 // (c, a) with c = tid % G. Threadgroup memory s[(kb * AR + a) * G + c].
-kernel void col_fwd_r(device uint *data [[buffer(0)]], device const uint *t4 [[buffer(1)]],
-                      constant Params &P [[buffer(2)]], constant uint *wR [[buffer(3)]],
+kernel void col_fwd_r(device uint *data [[buffer(0)]], device const tw_t *t4 [[buffer(1)]],
+                      constant Params &P [[buffer(2)]], constant tw_t *wR [[buffer(3)]],
                       uint tg [[threadgroup_position_in_grid]],
                       uint tid [[thread_index_in_threadgroup]]) {
     threadgroup uint s[R * G];
@@ -88,7 +102,7 @@ kernel void col_fwd_r(device uint *data [[buffer(0)]], device const uint *t4 [[b
     #pragma clang loop unroll(full)
     for (uint q = 0; q < BR; q++) {
         uint kb = brev(q, BR);
-        s[(kb * AR + a) * G + c] = mmul(x[q], wR[a * kb], P.p, P.pinv);
+        s[(kb * AR + a) * G + c] = twmul(x[q], wR[a * kb], P.p, P.pinv);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     // step 2: this thread takes kb = a, a + AR, ... (BR / AR transforms of length AR)
@@ -100,13 +114,13 @@ kernel void col_fwd_r(device uint *data [[buffer(0)]], device const uint *t4 [[b
         #pragma clang loop unroll(full)
         for (uint q = 0; q < AR; q++) {
             uint k1 = kb + BR * brev(q, AR);
-            d[k1 * C] = mmul(y[q], t4[k1 * C + n2], P.p, P.pinv);
+            d[k1 * C] = twmul(y[q], t4[k1 * C + n2], P.p, P.pinv);
         }
     }
 }
 
-kernel void col_inv_r(device uint *data [[buffer(0)]], device const uint *it4 [[buffer(1)]],
-                      constant Params &P [[buffer(2)]], constant uint *iwR [[buffer(3)]],
+kernel void col_inv_r(device uint *data [[buffer(0)]], device const tw_t *it4 [[buffer(1)]],
+                      constant Params &P [[buffer(2)]], constant tw_t *iwR [[buffer(3)]],
                       uint tg [[threadgroup_position_in_grid]],
                       uint tid [[thread_index_in_threadgroup]]) {
     threadgroup uint s[R * G];
@@ -118,7 +132,7 @@ kernel void col_inv_r(device uint *data [[buffer(0)]], device const uint *it4 [[
         #pragma clang loop unroll(full)
         for (uint q = 0; q < AR; q++) {
             uint k1 = kb + BR * brev(q, AR);
-            y[q] = mmul(d[k1 * C], it4[k1 * C + n2], P.p, P.pinv);
+            y[q] = twmul(d[k1 * C], it4[k1 * C + n2], P.p, P.pinv);
         }
         dit_reg<AR>(y, iwR, R, P);
         #pragma clang loop unroll(full)
@@ -129,7 +143,7 @@ kernel void col_inv_r(device uint *data [[buffer(0)]], device const uint *it4 [[
     #pragma clang loop unroll(full)
     for (uint q = 0; q < BR; q++) {
         uint kb = brev(q, BR);
-        x[q] = mmul(s[(kb * AR + a) * G + c], iwR[a * kb], P.p, P.pinv);
+        x[q] = twmul(s[(kb * AR + a) * G + c], iwR[a * kb], P.p, P.pinv);
     }
     dit_reg<BR>(x, iwR, R, P);
     #pragma clang loop unroll(full)
@@ -139,7 +153,7 @@ kernel void col_inv_r(device uint *data [[buffer(0)]], device const uint *it4 [[
 // RT rows per threadgroup, AC threads per row; thread (r, a) with a = tid % AC.
 // Threadgroup memory s[r][kb * AC + a].
 kernel void row_sq_r(device uint *data [[buffer(0)]], constant Params &P [[buffer(2)]],
-                     constant uint *wC [[buffer(3)]], constant uint *iwC [[buffer(4)]],
+                     constant tw_t *wC [[buffer(3)]], constant tw_t *iwC [[buffer(4)]],
                      uint tg [[threadgroup_position_in_grid]],
                      uint tid [[thread_index_in_threadgroup]]) {
     threadgroup uint s[RT * C];
@@ -153,7 +167,7 @@ kernel void row_sq_r(device uint *data [[buffer(0)]], constant Params &P [[buffe
     #pragma clang loop unroll(full)
     for (uint q = 0; q < BC; q++) {
         uint kb = brev(q, BC);
-        sr[kb * AC + a] = mmul(x[q], wC[a * kb], P.p, P.pinv);
+        sr[kb * AC + a] = twmul(x[q], wC[a * kb], P.p, P.pinv);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     for (uint kb = a; kb < BC; kb += AC) {
@@ -171,7 +185,7 @@ kernel void row_sq_r(device uint *data [[buffer(0)]], constant Params &P [[buffe
     #pragma clang loop unroll(full)
     for (uint q = 0; q < BC; q++) {
         uint kb = brev(q, BC);
-        x[q] = mmul(sr[kb * AC + a], iwC[a * kb], P.p, P.pinv);
+        x[q] = twmul(sr[kb * AC + a], iwC[a * kb], P.p, P.pinv);
     }
     dit_reg<BC>(x, iwC, C, P);
     #pragma clang loop unroll(full)

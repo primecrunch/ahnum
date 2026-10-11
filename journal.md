@@ -876,3 +876,33 @@ occupancy to a third. Forcing full unrolling on every register-array loop change
 (4.88 µs), so the arrays were already in registers; the pressure is genuine. Next: 8 elements per
 thread with a three-step split (C = 256 as 8 × 8 × 4), one more exchange, but small enough to stay
 in registers at full occupancy.
+
+## 22:13 — GPU: Stockham radix-8 loses, Shoup in the register kernels wins (−21%)
+
+**Stockham, 8 elements per thread.** Radix-8 passes (the last one radix 4 or 2), natural order in
+and out, two ping-pong threadgroup buffers, one barrier per pass. Correct, but slower than the
+16-per-thread register kernels: 7.56 µs at 32768 at first. The per-pass index arithmetic divided by
+a runtime sub-length, and the GPU has no hardware integer divide; with shifts and masks instead it
+reached 6.86, still behind 4.87. Counters: occupancy 40% with the occupancy target at 100% and low
+evictions. That cap comes from threadgroup memory (two buffers per threadgroup), not registers.
+The integer "complex" pipe showed an 82% limiter against 47% utilization, the same pattern as the
+register kernels (86% / 45%). Removed.
+
+**Shoup in the register kernels.** The complex pipe handles the costly integer ops, probably
+including `mulhi`. Montgomery uses two `mulhi` per multiply, Shoup one (plus a second table word).
+In the radix-2 kernel Shoup was 2× slower, because that kernel was bound by threadgroup round
+trips and the bigger table cost more than the saved `mulhi`. In the register kernels the complex
+pipe is the limit:
+
+| N | radix-2 | register | register + Shoup |
+|---|---|---|---|
+| 32768 | 5.55 µs | 4.87 µs | 3.83 µs |
+| 65536 | 11.78 µs | 10.18 µs | 7.93 µs |
+
+So −31% against where the GPU work started. The same optimisation went from 2× slower to 21%
+faster once the limit moved.
+
+Cost model update for 9001·2^662695−1 (4 primes at 32768, plus a guessed ~15 µs per squaring for
+the unbuilt parts): ~30 µs per squaring on an idle GPU. Alongside 13 CPU tests at the measured
+−22% CPU cost (if the GPU's slowdown under CPU load stays ~10%), that is ~330 CPU + ~170 GPU ≈
+500 tests/hour, about +13% over the CPU alone (442), up from ~+7%.

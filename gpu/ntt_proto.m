@@ -38,6 +38,9 @@ int main(int argc, char **argv) {
         uint32_t B = argc > 3 ? (uint32_t)atoi(argv[3]) : 64;
         uint32_t iters = argc > 4 ? (uint32_t)atoi(argv[4]) : 50;
         int fuse = getenv("AHN_GPU_FUSE") != NULL;
+        // AHN_GPU_SHOUP (register kernels): twiddle tables of (w, floor(w * 2^32 / p))
+        int shoup = getenv("AHN_GPU_SHOUP") != NULL;
+        size_t tws = shoup ? 8 : 4;  // bytes per twiddle entry
         // threads per threadgroup matched to the work per stage step
         // (radix-2: L/2 butterflies; fused radix-2^2: L/4 groups of 4)
         uint32_t N = R * C, G = 16, TPG_ROW = (fuse ? C / 4 : C / 2) < 256 ? (fuse ? C / 4 : C / 2) : 256;
@@ -62,6 +65,7 @@ int main(int argc, char **argv) {
                                                      "#define TPG_COL %u\n#define TPG_ROW %u\n",
                                                     R, C, G, TPG_COL, TPG_ROW];
         if (fuse) defs = [defs stringByAppendingString:@"#define FUSE 1\n"];
+        if (shoup) defs = [defs stringByAppendingString:@"#define SHOUP 1\n"];
         if (reg)
             defs = [defs stringByAppendingFormat:@"#define AR %u\n#define BR %u\n#define AC %u\n"
                                                   "#define BC %u\n#define RT %u\n",
@@ -97,32 +101,41 @@ int main(int argc, char **argv) {
         uint32_t scale = mulmod(Ninv, (uint32_t)(((uint64_t)1 << 32) % P));
 
         // w^i for i < R (C); the radix-2 kernels use the first half
-        id<MTLBuffer> bTwR = [dev newBufferWithLength:R * 4 options:MTLResourceStorageModeShared];
-        id<MTLBuffer> bItwR = [dev newBufferWithLength:R * 4 options:MTLResourceStorageModeShared];
-        id<MTLBuffer> bTwC = [dev newBufferWithLength:C * 4 options:MTLResourceStorageModeShared];
-        id<MTLBuffer> bItwC = [dev newBufferWithLength:C * 4 options:MTLResourceStorageModeShared];
-        id<MTLBuffer> bT4 = [dev newBufferWithLength:(size_t)N * 4 options:MTLResourceStorageModeShared];
-        id<MTLBuffer> bIt4 = [dev newBufferWithLength:(size_t)N * 4 options:MTLResourceStorageModeShared];
+        id<MTLBuffer> bTwR = [dev newBufferWithLength:R * tws options:MTLResourceStorageModeShared];
+        id<MTLBuffer> bItwR = [dev newBufferWithLength:R * tws options:MTLResourceStorageModeShared];
+        id<MTLBuffer> bTwC = [dev newBufferWithLength:C * tws options:MTLResourceStorageModeShared];
+        id<MTLBuffer> bItwC = [dev newBufferWithLength:C * tws options:MTLResourceStorageModeShared];
+        id<MTLBuffer> bT4 = [dev newBufferWithLength:(size_t)N * tws options:MTLResourceStorageModeShared];
+        id<MTLBuffer> bIt4 = [dev newBufferWithLength:(size_t)N * tws options:MTLResourceStorageModeShared];
         id<MTLBuffer> bData = [dev newBufferWithLength:(size_t)B * N * 4
                                                options:MTLResourceStorageModeShared];
         id<MTLBuffer> bPrm = [dev newBufferWithBytes:&prm length:sizeof prm
                                              options:MTLResourceStorageModeShared];
         uint32_t *twR = bTwR.contents, *itwR = bItwR.contents, *twC = bTwC.contents,
                  *itwC = bItwC.contents, *t4 = bT4.contents, *it4 = bIt4.contents;
+        // a twiddle entry makes twmul(x, entry) = x * v mod p
+        void (^put)(uint32_t *, size_t, uint32_t) = ^(uint32_t *t, size_t i, uint32_t v) {
+            if (shoup) {
+                t[2 * i] = v;
+                t[2 * i + 1] = (uint32_t)(((uint64_t)v << 32) / P);
+            } else {
+                t[i] = to_mont(v);
+            }
+        };
         for (uint32_t i = 0; i < R; i++) {
-            twR[i] = to_mont(powmod(wR, i));
-            itwR[i] = to_mont(powmod(wRi, i));
+            put(twR, i, powmod(wR, i));
+            put(itwR, i, powmod(wRi, i));
         }
         for (uint32_t i = 0; i < C; i++) {
-            twC[i] = to_mont(powmod(wC, i));
-            itwC[i] = to_mont(powmod(wCi, i));
+            put(twC, i, powmod(wC, i));
+            put(itwC, i, powmod(wCi, i));
         }
         for (uint32_t r = 0; r < R; r++) {
             // stored row r holds frequency k1 (natural order in the register kernels)
             uint32_t k1 = reg ? r : bitrev(r, rbits);
             for (uint32_t c = 0; c < C; c++) {
-                t4[r * C + c] = to_mont(powmod(wN, (uint64_t)k1 * c));
-                it4[r * C + c] = to_mont(mulmod(powmod(wNi, (uint64_t)k1 * c), scale));
+                put(t4, (size_t)r * C + c, powmod(wN, (uint64_t)k1 * c));
+                put(it4, (size_t)r * C + c, mulmod(powmod(wNi, (uint64_t)k1 * c), scale));
             }
         }
 
