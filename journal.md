@@ -239,3 +239,17 @@ The full 9357·2^369717−1 run:
 - SME: 35.6 s
 
 Both give RES64 F5FDA01218F20439.
+
+## 13:10 — Benchmark: 8243·2^872226−1 (known prime)
+
+On the quiet machine, NEON, FFT 71680 (12.17 bits/word):
+
+| Setup | Time per squaring | Result |
+|---|---|---|
+| 1 test, 1 core | 198 µs | 172.6 s; RES64 0000000000000001 (probable prime), max round-off 0.11, no Gerbicz errors |
+| 10 tests × 1 thread | 254 µs each | 162 tests/hour |
+| 14 tests × 1 thread | 325 µs each | 178 tests/hour |
+| 5 tests × 2 threads | — | 149 tests/hour |
+| 1 test × 10 threads | 41 µs | 101 tests/hour, but one test takes about 36 s |
+
+The number is a known prime, so it was added to `tests/known_residues.csv` as a PRP check.
