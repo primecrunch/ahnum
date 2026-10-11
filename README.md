@@ -142,8 +142,8 @@ and fixes it up with the previous range's carries.
 | 9357·2^369717−1 | 26880 | 1 thread | 64.3 µs | 24 s |
 | 9001·2^662695−1 | 49152 | 1 thread | 113 µs | 74.6 s |
 | 9001·2^662695−1 | 49152 | 10 tests × 1 thread | — | 371 tests/hour (97 s each) |
-| 9357·2^369717−1 | 28672 | 10 tests × 1 thread (earlier build) | 86 µs each | 1125 tests/hour |
-| 9357·2^369717−1 | 28672 | 14 tests × 1 thread, P+E (earlier build) | 110 µs each | 1244 tests/hour |
+| 9357·2^369717−1 | 26880 | 10 tests × 1 thread | 74 µs each | 1314 tests/hour |
+| 9357·2^369717−1 | 26880 | 14 tests × 1 thread (P+E) | 97 µs each | 1405 tests/hour |
 | 69·2^24612729−1 | 1638400 | 1 thread | 6.5 ms | 45 h |
 | 69·2^24612729−1 | 1638400 | 10 threads | 0.77 ms | 5.3 h |
 

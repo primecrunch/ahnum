@@ -595,3 +595,13 @@ tangent kernels changed which order wins there.
 Residue suite (28 known residues, n up to 872226) on the final build: orders 2 and 3 pass 28/28.
 Order 1 passed 28/28 earlier on the pre-tangent build, and order 0 passes via ctest. test_gmp
 cycles through all four orders against GMP.
+
+## 20:37 — Throughput on 9357·2^369717−1 with the new build
+
+`ahbench throughput` squaring-rate samples, 20 s per configuration, quiet machine after a rest:
+10 × 1 gives 1314 tests/hour (74.1 µs per squaring per test), 14 × 1 (P + E) gives 1405
+(97.1 µs). The first build measured 1125 and 1244. A second round after only a 60 s rest came out
+2–6% lower (1283 and 1315), which matches the heat effect seen before. Two earlier attempts this
+evening were discarded: one ran right after hours of prst work by the distributed client, and one
+overlapped a video call (camera, conferencing and video-encoder processes busy). They gave
+inconsistent results, including 14 × 1 slower than 10 × 1.
