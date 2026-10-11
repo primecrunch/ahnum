@@ -18,13 +18,14 @@ pass-2 forward and inverse stages ~11–12% each, split 10%, row transposes in/o
    its time.
 
 2. **Integer NTT on the GPU, alongside the CPU tests (research, prototype in `gpu/`).** A naive
-   radix-2 Metal NTT squaring mod one 31-bit prime takes 5.4 µs at N = 32768 (checked against a
-   direct cyclic square). 9001·2^662695−1 needs ~4 primes at 32768 (45-bit words, zero-padded,
-   exact), so ~22 µs of NTT plus unbuilt carry/CRT/reduction work per squaring. But running
-   the GPU flat out cuts 14-test CPU throughput from 452 to 353 tests/hour (−22%), and the GPU
-   slows 10%. Estimated net: ~+8% (range +2% to +26%). Next: find where the CPU loss comes
-   from (power or memory bandwidth), try 13 CPU tests plus the GPU feeder, and see whether
-   an optimised NTT kernel (radix 4/8, fewer barriers) lowers the GPU's cost to the CPU.
+   radix-2 Metal NTT squaring mod one 31-bit prime takes 5.4–5.7 µs at N = 32768 (checked
+   against a direct cyclic square). 9001·2^662695−1 needs ~4 primes at 32768 (45-bit words,
+   zero-padded, exact). The CPU loses throughput in proportion to GPU busy time (−7.4% at half
+   load, −22% at full; shared power), so CPU + GPU comes to ~+6–7% over CPU alone, assuming
+   ~15 µs per squaring for the unbuilt prime-combining, carries and reduction. The lever is GPU
+   kernel efficiency: half the GPU time per squaring would make it ~+25%. Next: Shoup
+   multiplies for twiddles (3 integer multiplies instead of 4); fused radix-2² stages did not
+   help.
 
 ## Done
 

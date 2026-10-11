@@ -761,3 +761,40 @@ together ≈ 490 against 452 alone, about +8% (+2% to +26% depending on those pa
 bandwidth. The GPU's feeder thread competes with 14 CPU tests for 14 cores. Next: separate the
 power and bandwidth causes, try 13 CPU tests plus the feeder, and optimise the NTT kernel to
 see if a cheaper GPU workload costs the CPU less.
+
+## 21:47 — GPU alongside the CPU: the cost is power, not the feeder thread
+
+I reran with the shader and binaries frozen in a separate directory. The first attempt read
+`gpu/ntt.metal` at start-up while I was editing it, so its GPU half never compiled and its
+results were discarded. 9001·2^662695−1, `ahbench throughput` 30 s, 90 s cool-downs, GPU at
+N = 32768 with 256 numbers in flight:
+
+| Run | CPU tests/hour | GPU µs per prime-squaring (busy) |
+|---|---|---|
+| 14 tests alone | 441.7 | — |
+| 14 tests + GPU at 50% | 409.2 (−7.4%) | 14.56 wall (46%) |
+| 13 tests alone | 422.6 | — |
+| 13 tests + GPU full | 330.4 (−21.8%) | 5.86 (97%) |
+| 14 tests + GPU full | 329.6 (−25.4%) | 6.19 (93%) |
+
+With 13 CPU tests the GPU runs at almost its solo speed (5.86 against 5.57), so with 14 the
+feeder thread was being starved. The CPU loss stays at ~22%, though, and scales with how busy
+the GPU is: −7.4% at half load, −22 to −25% at full. That fits the shared power budget.
+
+Combined, using the cost model (4 primes at N = 32768 plus a guessed ~15 µs per squaring for the
+unbuilt prime-combining, carries and reduction):
+- 13 tests + full GPU: 330 + ~141 ≈ 471 tests/hour.
+- 14 tests + half GPU: 409 + ~62 ≈ 471.
+- 14 tests + full GPU: 330 + ~137 ≈ 467.
+
+All about +6–7% over the best CPU-only figure (442). The CPU's loss tracks the GPU's busy time,
+not its work done, so a faster GPU kernel gives more GPU tests for the same CPU cost. GPU kernel
+efficiency is therefore the lever. If the GPU did the same work in half the time, the same run
+would come out near +25%.
+
+**Fused radix-2² stages: no help.** Fusing pairs of radix-2 stages into one step (one barrier
+and one threadgroup round trip per pair, `AHN_GPU_FUSE=1`) is correct but slower at C = 256
+(32768: 5.69 → 6.60 µs; 256 × 256: 11.86 → 15.50 µs). It only helps at C = 512 (18.2 → 13.4),
+where the plain kernel was poorly placed. Fusion keeps every modular multiply, so this points
+to the integer multiplies as the limit: ~2.4M `mul`/`mulhi` per prime-squaring. Next to try:
+Shoup's precomputed-quotient multiply for twiddles (3 multiplies instead of Montgomery's 4).

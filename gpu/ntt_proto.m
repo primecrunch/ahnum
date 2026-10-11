@@ -37,7 +37,11 @@ int main(int argc, char **argv) {
         uint32_t C = argc > 2 ? (uint32_t)atoi(argv[2]) : 256;
         uint32_t B = argc > 3 ? (uint32_t)atoi(argv[3]) : 64;
         uint32_t iters = argc > 4 ? (uint32_t)atoi(argv[4]) : 50;
-        uint32_t N = R * C, G = 16, TPG_COL = 256, TPG_ROW = C / 2 < 256 ? C / 2 : 256;
+        int fuse = getenv("AHN_GPU_FUSE") != NULL;
+        // threads per threadgroup matched to the work per stage step
+        // (radix-2: L/2 butterflies; fused radix-2^2: L/4 groups of 4)
+        uint32_t N = R * C, G = 16, TPG_ROW = (fuse ? C / 4 : C / 2) < 256 ? (fuse ? C / 4 : C / 2) : 256;
+        uint32_t TPG_COL = fuse ? 128 : 256;
         uint32_t rbits = __builtin_ctz(R);
 
         id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
@@ -52,6 +56,7 @@ int main(int argc, char **argv) {
         NSString *defs = [NSString stringWithFormat:@"#define R %u\n#define C %u\n#define G %u\n"
                                                      "#define TPG_COL %u\n#define TPG_ROW %u\n",
                                                     R, C, G, TPG_COL, TPG_ROW];
+        if (fuse) defs = [defs stringByAppendingString:@"#define FUSE 1\n"];
         id<MTLLibrary> lib = [dev newLibraryWithSource:[defs stringByAppendingString:src]
                                                options:nil
                                                  error:&err];
@@ -161,7 +166,7 @@ int main(int argc, char **argv) {
 
         // timing: iters squarings of all B numbers in one command buffer;
         // AHN_GPU_SECS=S keeps going for S seconds and reports the average
-        // (for runs alongside CPU load)
+        // (for runs alongside CPU load), optionally duty-cycled (AHN_GPU_DUTY)
         const char *secs_env = getenv("AHN_GPU_SECS");
         if (secs_env) {
             double secs = atof(secs_env), busy = 0;
@@ -174,8 +179,13 @@ int main(int argc, char **argv) {
                 [e endEncoding];
                 [cb commit];
                 [cb waitUntilCompleted];
-                busy += cb.GPUEndTime - cb.GPUStartTime;
+                double dt = cb.GPUEndTime - cb.GPUStartTime;
+                busy += dt;
                 sq += (uint64_t)iters * B;
+                // AHN_GPU_DUTY=f (0 < f <= 1): idle so the GPU runs a fraction f of the time
+                const char *duty = getenv("AHN_GPU_DUTY");
+                if (duty && atof(duty) > 0 && atof(duty) < 1)
+                    [NSThread sleepForTimeInterval:dt * (1 / atof(duty) - 1)];
             }
             double wall = -[t0 timeIntervalSinceNow];
             printf("sustained %.1f s: %.2f us per squaring mod one prime (wall), GPU busy %.0f%%\n",
