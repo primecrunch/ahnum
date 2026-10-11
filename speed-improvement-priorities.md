@@ -17,11 +17,14 @@ pass-2 forward and inverse stages ~11–12% each, split 10%, row transposes in/o
    loading the rows, not by FP: dropping its twiddle multiplies (56 → 32 ops) did not change
    its time.
 
-2. **Integer NTT on the GPU, alongside the CPU tests (research).** Apple GPUs have no FP64, but a
-   number-theoretic transform over 32-bit primes (Montgomery multiply, CRT across several
-   primes) in Metal could run extra tests while all CPU cores are busy. It is the only idea
-   left that could add tens of percent of throughput instead of a few. It has no cheap bound:
-   the first step is a prototype NTT-squaring kernel timed against the CPU at 49152.
+2. **Integer NTT on the GPU, alongside the CPU tests (research, prototype in `gpu/`).** A naive
+   radix-2 Metal NTT squaring mod one 31-bit prime takes 5.4 µs at N = 32768 (checked against a
+   direct cyclic square). 9001·2^662695−1 needs ~4 primes at 32768 (45-bit words, zero-padded,
+   exact), so ~22 µs of NTT plus unbuilt carry/CRT/reduction work per squaring. But running
+   the GPU flat out cuts 14-test CPU throughput from 452 to 353 tests/hour (−22%), and the GPU
+   slows 10%. Estimated net: ~+8% (range +2% to +26%). Next: find where the CPU loss comes
+   from (power or memory bandwidth), try 13 CPU tests plus the GPU feeder, and see whether
+   an optimised NTT kernel (radix 4/8, fewer barriers) lowers the GPU's cost to the CPU.
 
 ## Done
 

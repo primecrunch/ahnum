@@ -723,3 +723,41 @@ Why it fell short of the 1.5–3% estimate (and far short of the 5.3–6.4% boun
 Removing that table would mean also redesigning the inverse so the pending factors fold into the
 normaliser weights, worth at most ~1% more. Dropped. The patch is kept in
 `docs/experiments/dif-tangent-forward.patch` (applies to 6b24cf7).
+
+## 21:27 — GPU NTT prototype
+
+`gpu/ntt.metal` plus `gpu/ntt_proto.m` (Objective-C host; shaders compiled at run time, since the
+offline `metal` compiler is not installed). A batched four-step NTT squaring mod p = 15·2^27 + 1,
+N = R × C, in three dispatches that mirror the CPU passes:
+1. Column DIF in threadgroup memory, then the four-step twiddle.
+2. Row DIF, pointwise square, row DIT.
+3. Inverse twiddle and scale, then column DIT.
+
+The arithmetic is Montgomery with 2^32 from 32-bit `mul`/`mulhi`. The kernels are naive radix 2
+with a barrier after each stage. Each size checks one squaring against a direct cyclic square at
+64 positions. All pass.
+
+| N | numbers in flight | µs per squaring mod one prime |
+|---|---|---|
+| 32768 | 16 / 64 / 256 | 6.55 / 5.63 / 5.41 |
+| 65536 | 32 / 128 | 12.06 / 11.77 |
+| 131072 | 64 | 38.84 (a 3.3× jump, not explained yet) |
+
+Cost model for 9001·2^662695−1: the arithmetic is exact, so there is no k penalty and no safety
+margin. 45-bit words give 14,727 words, zero-padded to 32768, and the convolution needs ~104 bits,
+so 4 primes. That is ~22 µs of NTT per squaring. Combining the primes, carries, reduction mod
+k·2^n−1 and splitting back into words are not built.
+
+Alongside the CPU (14 tests of 9001·2^662695−1, 90 s cool-downs between runs):
+
+| | CPU tests/hour | GPU µs per prime-squaring |
+|---|---|---|
+| alone | 452.2 | 5.57 (99% busy) |
+| together | 352.7 (−22%) | 6.21 (92% busy) |
+
+At 6.21 µs, and guessing 10–20 µs for the unbuilt parts, the GPU would add ~120–150 tests/hour, so
+together ≈ 490 against 452 alone, about +8% (+2% to +26% depending on those parts). The CPU loses
+~100 tests/hour when the GPU runs, probably from the shared power budget, possibly also memory
+bandwidth. The GPU's feeder thread competes with 14 CPU tests for 14 cores. Next: separate the
+power and bandwidth causes, try 13 CPU tests plus the feeder, and optimise the NTT kernel to
+see if a cheaper GPU workload costs the CPU less.
