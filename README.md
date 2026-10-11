@@ -48,20 +48,24 @@ the full Gerbicz-checked test, checks the residue, and reports the speedup.
 ### Speed history
 
 9001·2^662695−1, full Gerbicz-checked Fermat test on a quiet M4 Pro. µs/squaring is the full
-test time divided by n. Throughput is 10 concurrent single-thread tests on the P-cores. Each row
-adds one improvement; details are in `journal.md`.
+test time divided by n. Throughput is complete concurrent single-thread tests, timed end to end:
+10 on the P-cores, and 14 on all cores (P + E; "—" where it was not measured). Each row adds
+one improvement; details are in `journal.md`. The 408 tests/h run had a few threads of other
+system load (load average peak 18.7 for 14 tests), worth ~2–4%.
 
-| Version | Commit | FFT | One core | µs/squaring | 10-test throughput |
-|---|---|---|---|---|---|
-| prst (gwnum via Rosetta 2), for reference | — | 49152 | 90.2 s | 136 | 283–307 tests/h |
-| First NEON build | `10b8039` | 51200 | 91.6 s | 138 | 298 tests/h |
-| Exact fixed-point IBDWT weights (shorter FFT) | `9dca186` | 49152 | 85.7 s | 129 | 295–313 tests/h |
-| Row transpose fused into the row FFT | `3780a4b` | 49152 | 80.3 s | 121 | 336–340 tests/h |
-| In-place normaliser, tangent DIT twiddles, tuned stage order | `3631fc5` | 49152 | 74.6 s | 113 | 371 tests/h |
+| Version | Commit | FFT | One core | µs/squaring | 10-test throughput | 14-test throughput |
+|---|---|---|---|---|---|---|
+| prst (gwnum via Rosetta 2), for reference | — | 49152 | 90.2 s | 136 | 283–307 tests/h | 329 tests/h |
+| First NEON build | `10b8039` | 51200 | 91.6 s | 138 | 298 tests/h | 321 tests/h |
+| Exact fixed-point IBDWT weights (shorter FFT) | `9dca186` | 49152 | 85.7 s | 129 | 295–313 tests/h | — |
+| Row transpose fused into the row FFT | `3780a4b` | 49152 | 80.3 s | 121 | 336–340 tests/h | — |
+| In-place normaliser, tangent DIT twiddles, tuned stage order | `3631fc5` | 49152 | 74.6 s | 113 | 371 tests/h | 408 tests/h |
 
-GPU prototype (`gpu/`, not yet a full test): running squarings on the GPU alongside 13 CPU tests
-gives 556 tests/hour, against 456 for 14 CPU tests alone (+22%), measured as squaring rates with
-`ahbench throughput` and `gpu_sq`. See the Measured section below.
+GPU prototype (`gpu/`): `gpu/gpu_prp.m` runs complete Gerbicz-checked tests on the GPU (64 at
+once: 154 tests/hour for 9001·2^662695−1, all residues correct, measured under heavy outside
+load). Alongside 13 CPU tests, squaring-rate samples give 556 tests/hour against 456 for 14 CPU
+tests alone (+22%); a complete-test measurement of the combination is still to do. See the
+Measured section below.
 
 ## Verified residues from primecrunch
 

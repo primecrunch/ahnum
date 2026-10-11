@@ -955,3 +955,67 @@ The full squaring spends half its time in the CRT, carry and reduction kernels, 
 presumably draw less power than the NTT. This is a measured throughput rate, not full tests:
 the GPU path still lacks Gerbicz checks, checkpoints and handling for a carry rippling past one
 word.
+
+## 22:40 — GPU PRP driver: carry fix-up, Gerbicz, checkpoints, known residues match
+
+**Carry ripple.** The one-word carry leaves a word over 45 bits only when a carry ripples
+further, which never happened in testing but is possible. That would be a deterministic error:
+Gerbicz would catch it, but rolling back would reproduce it every time. Now any overflow sets a
+per-number flag, and a one-thread-per-number `fixup_carry` pass normalises that number
+sequentially (it costs one flag read when nothing overflowed). It runs after the product
+words and after the reduction. A test mode (`AHN_GPU_FORCE_RIPPLE=1`) skips the fast one-word
+carry and flags every number, so the sequential path does all the carrying. It matches the CPU
+at 3·2^20000−1 and at 9001·2^662695−1. Normal speed is unchanged (31.5 µs per squaring).
+
+**Shared host code.** `gpu/gpu_ctx.h` holds the setup (pipelines, per-prime tables, buffers),
+`gctx_sqr` and `gctx_mul` (a general Montgomery product: both operands through the column pass,
+a new two-operand row kernel `row_mul_r`, then the usual CRT, carries and reduction), and the
+host-side conversions. `gpu_sq.m` (benchmark) and `gpu_prp.m` (driver) use it.
+
+**Driver** (`gpu/gpu_prp.m`). It mirrors `ahn_prp`:
+- x_0 = 3^k is computed on the CPU and converted to Montgomery form (x·2^n ≡ q + r·2^n for
+  x = q·k + r).
+- Gerbicz block L = √n with checks every L/4 blocks; on failure it rolls back to the last
+  verified (i, x, d), and the < L tail is run twice and compared.
+- The result is converted back from Montgomery form (x = X·k, since 2^−n ≡ k) and finished
+  with the CPU's `ahn_residue_nm1`, now exported from prp.c.
+
+There is no round-off check, because the integer NTT is exact; Gerbicz covers hardware faults
+and bugs. Checkpoints are written atomically and resume automatically. All B slots run the same
+number: the point is to measure throughput and check end to end.
+
+| Test | Result |
+|---|---|
+| 1203·2^90001−1, 4 slots | RES64 4BE9F1953E350085, matches, 6.9 s |
+| same, fault injected at 50,100 | caught at the next check (67,500), rolled back to 45,000, matches |
+| same, killed mid-run then resumed | resumed at 45,000, matches |
+| 9357·2^369717−1, 16 slots | F5FDA01218F20439, matches, 11.0 s per test, 327 tests/hour |
+
+At n = 369717 the 45-bit word count (8217) lands just past half of 16384, so the padded length
+doubles to 32768. 46-bit words would fit 16384 (8038 words, a coefficient bound of 2^105 against
+the primes' 2^119.9). The word size should be chosen per n.
+
+## 23:20 — 14-test full-run throughput for the speed history
+
+The README speed history tracked only 10-test full runs (371/h at `3631fc5`). The 456/h figure
+from earlier tonight is a 30 s `ahbench throughput` squaring-rate sample with 14 tests. It is not
+comparable: rate samples read ~10% above complete runs. So I measured the same way as the 10-test
+column, after a 3-minute cool-down: 14 concurrent `ahbench prp 9001 662695` runs, each checked
+against the expected residue. All 14 were probable prime with RES64 0000000000000001, 0 Gerbicz
+errors and max round-off 0.25, at 123.2–124.0 s per test (mean 123.6 s), so
+**14 × 3600 / 123.6 = 408 tests/hour** (+10% over 10 tests). The load log peaked at 18.7, a few
+threads above the 14 tests (`duetexpertd` held a core), worth perhaps 2–4%.
+
+The README table gained a 14-test column. The first build (321/h, 156 s per test) and prst
+(329.4/h) come from the 13:35 and 14:40 entries; the intermediate versions were not measured with
+14 tests.
+
+Two attempts before that never started. In zsh a glob that matches nothing is an error, so
+`rm -f dir/f14_*.log` aborted the command before the cool-down. Then a backgrounded
+`cd && S=... && sleep && (logger) &` chain took the `cd` and the variable into its subshell,
+away from the foreground part that launched the tests. A script file fixed both.
+
+Earlier in the evening the CPU + GPU end-to-end run hit heavy outside contention: a 15-minute
+load average of ~32 against ~14 threads of our own. All 64 GPU tests of 9001·2^662695−1 were
+correct (probable prime, RES64 1, Gerbicz errors 0) at 23.3 s per test, 154 tests/hour, but the
+CPU side read 91 tests/hour, so the combined figure needs a quiet rerun.

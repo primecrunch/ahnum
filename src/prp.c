@@ -63,7 +63,7 @@ static void div_small_mod_N(uint64_t *a, const uint64_t *N, size_t n, uint64_t d
 // y = base^(N+1) mod N  ->  base^(N-1) mod N, also when gcd(base, N) > 1:
 // write N = Q*M with Q built from the primes of base; the result is 0 mod Q
 // and y / base^2 mod M, combined by CRT. Returns -1 if Q does not fit.
-static int residue_nm1(uint64_t *y, const uint64_t *N, size_t n, uint64_t base) {
+int ahn_residue_nm1(uint64_t *y, const uint64_t *N, size_t n, uint64_t base) {
     uint64_t Q = 1, b = base;
     uint64_t *M = malloc((n + 1) * 8), *t = calloc(n + 1, 8);
     memcpy(M, N, n * 8);
@@ -410,7 +410,7 @@ int ahn_prp(uint64_t k, uint64_t n, uint32_t base, const ahn_prp_opts *opts,
         for (size_t j = 0; j < nl; j++) {
             if (Nl[j]--) break;
         }
-        if (residue_nm1(la, Nl, nl, base)) rc = -4;
+        if (ahn_residue_nm1(la, Nl, nl, base)) rc = -4;
         free(Nl);
         res->res64 = la[0];
         res->is_prp = is_prp;

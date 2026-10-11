@@ -89,18 +89,41 @@ static inline ulong colsum(device const ulong *pt, int j) {
     return s;
 }
 
-// product words D_j = (s_j & M45) + (s_(j-1) >> 45), j < NP; a D_j that still
-// exceeds 45 bits (a longer carry ripple) is counted in *ovf
+// product words D_j = (s_j & M45) + (s_(j-1) >> 45), j < NP. A D_j that still
+// exceeds 45 bits (a carry rippling further) sets flag[test], and fixup_carry
+// then normalises that number sequentially. FORCE_RIPPLE (test mode) skips the
+// one-word carry and flags every number, so the sequential path does all of it.
 kernel void carry(device const ulong *parts [[buffer(0)]], device ulong *D [[buffer(1)]],
-                  constant uint &B [[buffer(3)]], device atomic_uint *ovf [[buffer(4)]],
+                  constant uint &B [[buffer(3)]], device uint *flag [[buffer(4)]],
                   uint gid [[thread_position_in_grid]]) {
     uint test = gid / NP;
     int j = int(gid % NP);
     if (test >= B) return;
     device const ulong *pt = parts + (size_t)test * NP * 3;
+#ifdef FORCE_RIPPLE
+    ulong d = colsum(pt, j);
+    if (j == 0) flag[test] = 1;
+#else
     ulong d = (colsum(pt, j) & M45) + (colsum(pt, j - 1) >> 45);
-    if (d >> 45) atomic_fetch_add_explicit(ovf, 1, memory_order_relaxed);
+    if (d >> 45) flag[test] = 1;
+#endif
     D[gid] = d;
+}
+
+// One thread per number: if flagged, propagate carries through all len words
+// (rare outside FORCE_RIPPLE; costs one flag read otherwise).
+kernel void fixup_carry(device ulong *v [[buffer(1)]], constant uint &B [[buffer(3)]],
+                        device uint *flag [[buffer(4)]], constant uint &len [[buffer(6)]],
+                        uint test [[thread_position_in_grid]]) {
+    if (test >= B || !flag[test]) return;
+    device ulong *vt = v + (size_t)test * len;
+    ulong c = 0;
+    for (uint j = 0; j < len; j++) {
+        ulong s = vt[j] + c;
+        vt[j] = s & M45;
+        c = s >> 45;
+    }
+    flag[test] = 0;
 }
 
 // A_j and B_j of P = A + B 2^n, from the product words
@@ -127,13 +150,18 @@ static inline ulong wordE(device const ulong *D, int j, uint k) {
 // X_j = (E_j & M45) + (E_(j-1) >> 45), E = B + k A; j < W
 kernel void redc(device const ulong *D [[buffer(0)]], device ulong *x [[buffer(1)]],
                  constant Garner &gc [[buffer(2)]], constant uint &B [[buffer(3)]],
-                 device atomic_uint *ovf [[buffer(4)]], uint gid [[thread_position_in_grid]]) {
+                 device uint *flag [[buffer(4)]], uint gid [[thread_position_in_grid]]) {
     uint test = gid / W;
     int j = int(gid % W);
     if (test >= B) return;
     device const ulong *Dt = D + (size_t)test * NP;
+#ifdef FORCE_RIPPLE
+    ulong v = wordE(Dt, j, gc.k);
+    if (j == 0) flag[test] = 1;
+#else
     ulong v = (wordE(Dt, j, gc.k) & M45) + (wordE(Dt, j - 1, gc.k) >> 45);
-    if (v >> 45) atomic_fetch_add_explicit(ovf, 1, memory_order_relaxed);
+    if (v >> 45) flag[test] = 1;
+#endif
     x[gid] = v;
 }
 

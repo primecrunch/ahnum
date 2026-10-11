@@ -191,3 +191,56 @@ kernel void row_sq_r(device uint *data [[buffer(0)]], constant Params &P [[buffe
     #pragma clang loop unroll(full)
     for (uint b = 0; b < BC; b++) d[a + AC * b] = x[b];
 }
+
+// Row pass for a general product: a and b have both had col_fwd_r; per row,
+// forward row DFT of both, pointwise a * b into a, inverse row DFT of a.
+// Same layout and index maps as row_sq_r.
+kernel void row_mul_r(device uint *data [[buffer(0)]], device const uint *datb [[buffer(5)]],
+                      constant Params &P [[buffer(2)]], constant tw_t *wC [[buffer(3)]],
+                      constant tw_t *iwC [[buffer(4)]], uint tg [[threadgroup_position_in_grid]],
+                      uint tid [[thread_index_in_threadgroup]]) {
+    threadgroup uint s[RT * C], sb[RT * C];
+    uint a = tid % AC, r = tid / AC;
+    threadgroup uint *sr = s + r * C, *srb = sb + r * C;
+    device uint *d = data + ((size_t)tg * RT + r) * C;
+    device const uint *db = datb + ((size_t)tg * RT + r) * C;
+    uint x[BC], xb[BC];
+#pragma clang loop unroll(full)
+    for (uint b = 0; b < BC; b++) {
+        x[b] = d[a + AC * b];
+        xb[b] = db[a + AC * b];
+    }
+    dif_reg<BC>(x, wC, C, P);
+    dif_reg<BC>(xb, wC, C, P);
+#pragma clang loop unroll(full)
+    for (uint q = 0; q < BC; q++) {
+        uint kb = brev(q, BC);
+        sr[kb * AC + a] = twmul(x[q], wC[a * kb], P.p, P.pinv);
+        srb[kb * AC + a] = twmul(xb[q], wC[a * kb], P.p, P.pinv);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint kb = a; kb < BC; kb += AC) {
+        uint y[AC], yb[AC];
+#pragma clang loop unroll(full)
+        for (uint aa = 0; aa < AC; aa++) {
+            y[aa] = sr[kb * AC + aa];
+            yb[aa] = srb[kb * AC + aa];
+        }
+        dif_reg<AC>(y, wC, C, P);
+        dif_reg<AC>(yb, wC, C, P);
+#pragma clang loop unroll(full)
+        for (uint q = 0; q < AC; q++) y[q] = mmul(y[q], yb[q], P.p, P.pinv);
+        dit_reg<AC>(y, iwC, C, P);
+#pragma clang loop unroll(full)
+        for (uint aa = 0; aa < AC; aa++) sr[kb * AC + aa] = y[aa];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+#pragma clang loop unroll(full)
+    for (uint q = 0; q < BC; q++) {
+        uint kb = brev(q, BC);
+        x[q] = twmul(sr[kb * AC + a], iwC[a * kb], P.p, P.pinv);
+    }
+    dit_reg<BC>(x, iwC, C, P);
+#pragma clang loop unroll(full)
+    for (uint b = 0; b < BC; b++) d[a + AC * b] = x[b];
+}

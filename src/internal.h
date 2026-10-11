@@ -79,6 +79,9 @@ void ahn_carry_digits(const ahn_ctx *ctx, int64_t *dig);
 uint32_t ahn_choose_fft_len(uint64_t k, uint64_t n);
 uint32_t ahn_next_fft_len(uint32_t L);
 uint32_t ahn_tuned_plan_order(uint32_t L);
+// y = base^(N+1) mod N (n limbs) -> base^(N-1) mod N, also when gcd(base, N) > 1
+// (src/prp.c); returns -1 if the base-prime part of N does not fit a word.
+int ahn_residue_nm1(uint64_t *y, const uint64_t *N, size_t n, uint64_t base);
 double ahn_safe_bpw(uint32_t L, uint64_t k);
 // Layout helpers shared by the backends (exact rational arithmetic in T').
 uint64_t ahn_s_at(const ahn_ctx *ctx, uint64_t j);
