@@ -50,8 +50,11 @@ the full Gerbicz-checked test, checks the residue, and reports the speedup.
 9001·2^662695−1, full Gerbicz-checked Fermat test on a quiet M4 Pro. µs/squaring is the full
 test time divided by n. Throughput is complete concurrent single-thread tests, timed end to end:
 10 on the P-cores, and 14 on all cores (P + E; "—" where it was not measured). Each row adds
-one improvement; details are in `journal.md`. The 408 tests/h run had a few threads of other
-system load (load average peak 18.7 for 14 tests), worth ~2–4%.
+one improvement; details are in `journal.md`. Each figure is one round of tests (~2 minutes)
+started on a cool machine. The machine is a 16" MacBook Pro: under sustained load its clocks drop
+~10% as thermal pressure rises, and 14 tests sustain ~372 tests/h at `3631fc5` (25-minute run,
+2026-10-12). The first 14-test measurement at `3631fc5` read 408 tests/h with `duetexpertd`
+holding a core; the quiet rerun gave 423.
 
 | Version | Commit | FFT | One core | µs/squaring | 10-test throughput | 14-test throughput |
 |---|---|---|---|---|---|---|
@@ -59,13 +62,14 @@ system load (load average peak 18.7 for 14 tests), worth ~2–4%.
 | First NEON build | `10b8039` | 51200 | 91.6 s | 138 | 298 tests/h | 321 tests/h |
 | Exact fixed-point IBDWT weights (shorter FFT) | `9dca186` | 49152 | 85.7 s | 129 | 295–313 tests/h | — |
 | Row transpose fused into the row FFT | `3780a4b` | 49152 | 80.3 s | 121 | 336–340 tests/h | — |
-| In-place normaliser, tangent DIT twiddles, tuned stage order | `3631fc5` | 49152 | 74.6 s | 113 | 371 tests/h | 408 tests/h |
+| In-place normaliser, tangent DIT twiddles, tuned stage order | `3631fc5` | 49152 | 74.6 s | 113 | 371 tests/h | 423 tests/h |
 
-GPU prototype (`gpu/`): `gpu/gpu_prp.m` runs complete Gerbicz-checked tests on the GPU (64 at
-once: 154 tests/hour for 9001·2^662695−1, all residues correct, measured under heavy outside
-load). Alongside 13 CPU tests, squaring-rate samples give 556 tests/hour against 456 for 14 CPU
-tests alone (+22%); a complete-test measurement of the combination is still to do. See the
-Measured section below.
+GPU prototype (`gpu/`, on hold): `gpu/gpu_prp.m` runs complete Gerbicz-checked tests on the GPU,
+173 tests/hour alone for 9001·2^662695−1 with 64 in flight. On this MacBook Pro, running it
+alongside the CPU tests loses throughput: within a minute macOS caps the P-cores at 1800 MHz and
+~5 W to give the GPU its power, and the combination sustains ~244 tests/hour against ~372 for the
+CPU alone. The +22% from 30 s squaring-rate samples measured the first minute, before the cap.
+It may still pay on a desktop with a bigger power budget.
 
 ## Verified residues from primecrunch
 
@@ -150,18 +154,19 @@ and fixes it up with the previous range's carries.
 | 9357·2^369717−1 | 26880 | 1 thread | 64.3 µs | 24 s |
 | 9001·2^662695−1 | 49152 | 1 thread | 113 µs | 74.6 s |
 | 9001·2^662695−1 | 49152 | 10 tests × 1 thread | — | 371 tests/hour (97 s each) |
-| 9001·2^662695−1 | 49152 | 14 tests × 1 thread (P+E)\* | 167 µs each | 456 tests/hour |
-| 9001·2^662695−1 | 49152 CPU, 32768 NTT on GPU | 13 tests × 1 thread + GPU prototype\* | CPU 185 µs each, GPU 31.3 µs | 556 tests/hour (382 CPU + 174 GPU) |
-| 9001·2^662695−1 | 32768 NTT on GPU | GPU prototype alone, 64 numbers in flight\* | 30.6 µs | 173 tests/hour |
+| 9001·2^662695−1 | 49152 | 14 tests × 1 thread (P+E), first round | — | 423 tests/hour (119 s each) |
+| 9001·2^662695−1 | 49152 | 14 tests × 1 thread (P+E), sustained 25 min | — | ~372 tests/hour (~135 s each) |
+| 9001·2^662695−1 | 49152 CPU, 32768 NTT on GPU | 13 tests × 1 thread + GPU prototype, sustained | — | ~244 tests/hour (85 CPU + 159 GPU) |
+| 9001·2^662695−1 | 32768 NTT on GPU | GPU prototype alone, 64 numbers in flight | 30.6 µs | 173 tests/hour |
 | 9357·2^369717−1 | 26880 | 10 tests × 1 thread | 74 µs each | 1314 tests/hour |
 | 9357·2^369717−1 | 26880 | 14 tests × 1 thread (P+E) | 97 µs each | 1405 tests/hour |
 | 69·2^24612729−1 | 1638400 | 1 thread | 6.5 ms | 45 h |
 | 69·2^24612729−1 | 1638400 | 10 threads | 0.77 ms | 5.3 h |
 
-\* Squaring rates from `ahbench throughput` and `gpu/gpu_sq.m` (30–40 s samples), not complete tests;
-full runs come out ~10% lower than squaring-rate samples. The GPU path (`gpu/`) is a prototype:
-a complete squaring mod k·2^n−1 (4-prime integer NTT, Garner CRT, Montgomery reduction with
-R = 2^n), checked against the CPU, but without Gerbicz checks or checkpoints yet.
+The 9001·2^662695−1 throughput rows are complete tests with checked residues (2026-10-12). The
+GPU path (`gpu/`) is a prototype on hold: a complete squaring mod k·2^n−1 (4-prime integer NTT,
+Garner CRT, Montgomery reduction with R = 2^n) with Gerbicz checks and checkpoints, at one
+transform length (32768).
 
 At n ≈ 370K, splitting a test across threads loses throughput (5×2 gives 892 tests/hour, 1×10
 gives 510), so run one test per core. For record sizes, run one test across all P-cores.

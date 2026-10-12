@@ -2,7 +2,9 @@
 
 Ranked candidates for making ahnum faster. Each item gets an upper-bound measurement first (a
 deliberately wrong build that skips the work), and is dropped if the bound is under ~3% unless
-it is nearly free. Measure on a quiet machine. Results go in `journal.md`; landed gains go in
+it is nearly free. Measure on a quiet machine (`tools/quiet.sh check`, which also waits for
+thermal pressure 0), under `caffeinate -i`. Short runs read ~12% above what this MacBook Pro
+sustains, so compare like with like. Results go in `journal.md`; landed gains go in
 the README speed history table.
 
 Reference point: 9001·2^662695−1, FFT 49152, 113 µs per squaring, 74.6 s per test.
@@ -17,15 +19,16 @@ pass-2 forward and inverse stages ~11–12% each, split 10%, row transposes in/o
    loading the rows, not by FP: dropping its twiddle multiplies (56 → 32 ops) did not change
    its time.
 
-2. **GPU squaring alongside the CPU tests (prototype in `gpu/`, measured +22%).** A complete
-   squaring mod k·2^n−1 runs on the GPU (`gpu/gpu_sq.m`): residues mod 4 primes, four NTT
-   squarings (register kernels, Shoup twiddles), Garner CRT, carries, and Montgomery reduction
-   with R = 2^n (P·2^−n = B + k·A). It matches ahnum's CPU result and takes 30.6 µs per
-   squaring of GPU throughput (173 tests/hour alone). 13 CPU tests + GPU give 556 tests/hour
-   against 456 for 14 CPU tests alone. To make it usable for real tests: Gerbicz checks,
-   checkpoints, multi-word carry ripples, the PRP driver loop on the GPU, and lengths other
-   than 32768. Kernel headroom remains: register spills (occupancy 31%), and the non-NTT
-   kernels take half the time and have not been tuned.
+## On hold
+
+- **GPU squaring alongside the CPU tests (prototype in `gpu/`).** `gpu/gpu_prp.m` runs complete
+  Gerbicz-checked tests at one length (32768): 173 tests/hour alone. On this MacBook Pro the
+  combination loses (2026-10-12, complete tests with `powermetrics`): within a minute of the GPU
+  starting, macOS caps the P-cores at 1800 MHz and the CPU at ~5 W while the GPU keeps 15–22 W,
+  and with thermal pressure Heavy it leaves P-cores idle. 13 CPU tests + GPU sustain ~244
+  tests/hour against ~372 for 14 CPU tests alone. The +22% from 30 s samples was the first
+  minute. Worth revisiting only on a desktop (e.g. the Mac mini) with a bigger power budget;
+  remaining work there would be other lengths, word size per n, and kernel tuning.
 
 ## Done
 

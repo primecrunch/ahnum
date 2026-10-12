@@ -1019,3 +1019,128 @@ Earlier in the evening the CPU + GPU end-to-end run hit heavy outside contention
 load average of ~32 against ~14 threads of our own. All 64 GPU tests of 9001·2^662695−1 were
 correct (probable prime, RES64 1, Gerbicz errors 0) at 23.3 s per test, 154 tests/hour, but the
 CPU side read 91 tests/hour, so the combined figure needs a quiet rerun.
+
+## 2026-10-12 08:15 — Guarding benchmarks against outside processes
+
+The 408 tests/hour run lost perhaps 2–4% to `duetexpertd`, the macOS daemon behind Siri
+Suggestions and proactive suggestions. It rebuilds its prediction models in bursts when the
+machine looks idle, and a box running only command-line tests looks idle to it. It runs as a
+per-user LaunchAgent and had used 65 minutes of CPU time since it last started. Rather than
+chase that one daemon (Spotlight indexing, photo analysis, Time Machine and software update do
+the same), `tools/quiet.sh` checks for any outside process:
+
+- `check [SETTLE] [TIMEOUT]` waits until nothing outside has been busy for SETTLE seconds
+  (default 180, which doubles as the cool-down), or exits 1 listing the busy processes.
+- `log FILE` runs in the background during a measurement and records the load average and every
+  outside process at 5%+ CPU every 5 s; `summary FILE` gives the peak load and each process's peak.
+
+The first thresholds (5% per process, 25% in total) never passed with the display on:
+WindowServer sits at 6–17% and a Chrome renderer at ~10%. A process at 10% takes a tenth of a
+core, about 0.7% of 14-test throughput; `duetexpertd` took a whole core. So `check` now waits on
+any process above 20% or a total above 50%, and `log` still records everything from 5%, so the
+journal can say what ran alongside each measurement.
+
+## 2026-10-12 09:40 — Quiet-machine round: 14 CPU, CPU + GPU, GPU alone
+
+Distributed compute stopped, `tools/quiet.sh check` before each phase (3 quiet minutes), the
+load logged throughout, 9001·2^662695−1 at `999a580`, every residue checked.
+
+- **14 CPU tests:** all correct, 118.7–119.4 s (mean 119.1 s), **423 tests/hour**. The 408/h run
+  with `duetexpertd` holding a core was 3.7% low. Outside processes peaked at 27% of a core.
+- **GPU alone, 64 slots:** all correct, 0 Gerbicz errors, 1330.5 s, **173 tests/hour**, the same
+  as the squaring-rate sample. `gpu_prp` itself used ~0% CPU (it waits in `waitUntilCompleted`)
+  and the load average stayed under 1.6.
+- **13 CPU + GPU:** the GPU batch was correct at 1407 s (164 tests/hour, 5% below alone). All 39
+  completed CPU tests were correct, but they slowed down from round to round: mean 159.5 s, then
+  249 s, then 522 s. The load average rose from 13 to 54.7 while outside processes logged only
+  7–17% of a core, `ahbench` runs one thread and `gpu_prp` one, memory was 87% free and no
+  thermal warning was recorded. The display turned off at 08:54, about when round 3 began and
+  the load passed 40. Last night's combined run (load ~32, CPU side 91 tests/hour) looks like the
+  same effect rather than outside load. Round 1 alone gives 13 × 3600 / 159.5 + 164 = 457
+  tests/hour (+8% over 423), well below the +22% from 30 s samples, and even that holds only if
+  the slowdown can be fixed.
+
+Two things went wrong with the method. The Mac's system sleep timer is 1 minute, and with the
+compute client stopped nothing held it awake: it slept from 08:33 to 08:41 during a pre-flight
+wait. Benchmark processes do not prevent idle sleep, so runs now need `caffeinate -i`. And the
+logger only recorded outside processes, so it could not show how much CPU our own processes got
+while the load climbed; it now logs their total as well.
+
+## 2026-10-12 10:35 — CPU + GPU rerun with the display kept on
+
+Same run as 09:40's middle phase under `caffeinate -i -d`, plus a 30 s sampler of runnable
+threads per process and each `ahbench`'s %CPU. The display was not the cause: rounds averaged
+157 s, 221 s and 494 s again (GPU 1415.6 s, 163 tests/hour, all 64 + 39 residues correct).
+
+The sampler shows what happened. For the first ~4 minutes the 13 `ahbench` processes got 1226–
+1298% CPU (each ≥92%). From 10:14 the total fell to 900%, then held at 520–630% for the rest
+of the run, with single tests down to 32–45%. Outside processes used 5–15% and `gpu_prp` ~0%.
+So about 6 of the 14 cores were doing our work and nothing else was using the other 8, while
+the load average (runnable threads) sat at ~20: the tests were runnable but not being run.
+No thermal or performance warning was recorded by `pmset -g therm`.
+
+The machine is a 16" MacBook Pro (Mac16,7, M4 Pro, 10 P + 4 E cores) on AC. The slowdown starts
+a few minutes into sustained load and does not recover, which looks like thermal or power
+management taking cores away. Every CPU-only measurement in the speed history lasts ~2 minutes
+per test with all tests in step, short enough to finish before it starts. Next: a CPU-only run
+of the same length to see whether the GPU is needed to trigger it, with `powermetrics` reading
+frequency, residency and thermal pressure directly.
+
+## 2026-10-12 11:30 — 25 minutes of CPU-only load, with powermetrics
+
+14 `ahbench prp 9001 662695` slots kept busy for 1500 s, no GPU, `sudo powermetrics -i 10000
+--samplers cpu_power,gpu_power,thermal` alongside. All 154 completed tests were correct.
+
+No cores were lost: the 14 tests held 1300–1376% CPU and the load stayed at ~15.5. But they got
+slower each round: 116.7, 124.0, 126.8, 128.6, 130.4, 130.6, 131.5, 131.7, 132.6, 136.3,
+135.4 s. powermetrics shows why. Both P-clusters ran at 2948–3016 MHz with ~38.5 W of CPU power
+in the first minutes, then fell steadily to ~2650 MHz and ~31 W (E-cluster fixed at 2592 MHz).
+Thermal pressure went Nominal → Moderate after ~12 minutes → Heavy after ~17. The 10% clock
+drop matches the 13–16% slowdown. `pmset -g therm` reported none of this; the pressure level is
+readable without root as `notifyutil -g com.apple.system.thermalpressurelevel` (0 nominal,
+1 moderate, 2 heavy).
+
+So the README's CPU numbers are 2-minute figures from a cool machine. Sustained 14-test
+throughput on this MacBook Pro is 14 × 3600 / ~135.5 = ~372 tests/hour, not 423. And the
+collapse seen in both CPU + GPU runs (whole cores idle while tests wait) did not happen
+without the GPU. The likely explanation, not yet measured, is that GPU power on top of ~31 W of
+CPU pushes thermal pressure past Heavy, where macOS stops scheduling work on some cores rather
+than only lowering clocks. If so, running both on this laptop is a net loss after ~6 minutes.
+
+`tools/quiet.sh check` now waits for thermal pressure 0 and `log` records the level, since a
+warm start lowers the clocks by up to 10%.
+
+## 2026-10-12 12:05 — CPU + GPU with powermetrics: macOS gives the power to the GPU
+
+Same 13 CPU + 64-slot GPU run, with `powermetrics` (10 s samples). All residues correct
+(64 GPU, 39 CPU). GPU 1446.3 s, 159 tests/hour. CPU rounds: 181 s, 506 s, 588 s.
+
+| time | P-cluster MHz | CPU W | GPU W | pressure | `ahbench` total CPU |
+|---|---|---|---|---|---|
+| 11:36:20 (start) | 3026 / 3138 | 40.6 | 21.9 | Nominal | — |
+| 11:37:20 | 1692 / 1812 | 14.8 | 22.0 | Nominal | 1193% |
+| 11:39:21 | 1800 / 1800 | 11.9 | 19.3 | Heavy | 719% |
+| 11:41–12:00 | ~1798 / ~1796 | 4.1–4.9 | 14–17 | mostly Heavy | 490–570% |
+
+Within a minute of the GPU starting, and while thermal pressure was still Nominal, the P-cluster
+clocks were capped at 1800 MHz (from ~3000) and CPU power cut from 40.6 W to 14.8 W. The GPU
+kept 22 W. Once pressure reached Heavy, the cap stayed and the P-cores were also kept idle much
+of the time: in a sample at 11:50 the four E-cores were 100% active at 2592 MHz, but the ten
+P-cores were active 81, 42, 27, 35, 17, 80, 36, 26, 25 and 11% (3.8 cores' worth) on 4.3 W
+while the GPU drew 15.5 W. The runnable `ahbench` threads waited for P-cores that were held
+idle, which is the load of ~20 with little CPU in use.
+
+So this is macOS's power policy on this MacBook Pro, not outside load. With the GPU busy the
+CPU is limited to a few watts, and the whole package runs at ~20 W, well below the ~31 W the
+CPU alone sustains. Sustained throughput: CPU side 13 × 3600 / ~550 s ≈ 85 tests/hour + GPU 159
+≈ **244 tests/hour**, against ~372 for the CPU alone and 173 for the GPU alone. Running both is
+a 35% loss here. The +22% from 30 s samples measured the first minute, before the cap.
+
+## 2026-10-12 12:15 — Decision: CPU only for now
+
+The GPU path goes on hold. On a laptop macOS gives the power budget to the GPU and the CPU
+loses more than the GPU adds, so it would only pay on desktops, and that makes it lower
+priority than CPU work that helps every machine. It may be revisited on the Mac mini. The
+README now gives complete-test figures for the GPU rows, labels the speed history as
+one-round (~2 minute) figures, and adds the sustained 14-test number (~372 tests/hour); the
+priorities file moves the GPU item to an "On hold" section with these measurements.
