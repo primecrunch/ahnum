@@ -1358,3 +1358,23 @@ PRST's own "time per op" during a proof save read 0.42 ms against ahprst's 0.12,
 figure during `-proof save` is not comparable with its plain test, so only wall time
 compares. The figure that matters is 14 single-thread proof tests side by side, still to
 measure.
+
+## 2026-10-12 22:10 — Deployment target macOS 11
+
+The binaries were marked `minos 27.0`: with no deployment target set, CMake uses the build
+machine's macOS, and the loader refuses the binary on anything older. CMakeLists.txt now sets
+`CMAKE_OSX_DEPLOYMENT_TARGET` to 11.0, the first macOS for Apple Silicon. A clean build gives
+`minos 11.0` for ahprst and ahbench with no availability warnings, ahprst links only
+libSystem, and all 11 tests pass. The only linker warnings come from Homebrew's GMP (built
+for macOS 15), used by the test tools gmp_ref and test_gmp, which are not shipped.
+
+On other M chips: C is compiled with `-mcpu=apple-m1` and the NEON kernels use ARMv8 FP64
+SIMD only. The SME backend is opt-in and checks `hw.optional.arm.FEAT_SME_F64F64` before use.
+Without `~/.ahnum/fft_times.txt` (written by `ahbench tune`) ahnum uses its default FFT length
+choice and stage order. The macOS 11 build, copied (not rebuilt) to a base M4 Mac mini
+(macOS 27, busy with other work), passed `tests/prst_compat.sh` and all 12 known residues
+below n = 100,000 with no tuning file. Not yet run on an M1–M3 or on a macOS older than 27.
+No M1–M3 is available locally (the other Macs are Intel, where ahprst cannot run and PRST
+stays), so `.github/workflows/ci.yml` builds and runs `ctest -LE long` on GitHub's Apple
+Silicon runners: macos-14 and macos-15, both M1. That covers an older chip and older macOS
+for correctness; the runners are virtualised, so no timings.

@@ -1,4 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
+# macOS 11 is the first release for Apple Silicon; nothing here needs a newer one.
+set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 project(ahnum C ASM)
 
 set(CMAKE_C_STANDARD 11)
