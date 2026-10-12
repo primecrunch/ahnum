@@ -21,13 +21,7 @@ p1 inverse (1.92×) and pass-2 rows in/out (1.90×) slow most, so their shares g
 p1 inverse 18.6%, normaliser 15.8%, rows in + out 14.2%. The ranking below follows it. 14 tests is
 the right count: 12 sustain ~6% less (see Tried and dropped).
 
-1. **Normaliser (80% of its limit, 17% of the time).** After the in-place rewrite it is still
-   tied to the carry-chain latency (fmla → frintn per digit). More chains in flight (4 → 8) or
-   splitting each group's carries across two independent halves with a fix-up, as pass 1 does
-   between threads, would give ~2–3% if it reaches the FP limit. Check first that it is still
-   latency-bound at 2650 MHz, where the latency is the same in cycles but the time is longer.
-
-2. **Fewer FP operations: radix-16 stages.** Kernels already run at 80–95% of the FP limit,
+1. **Fewer FP operations: radix-16 stages.** Kernels already run at 80–95% of the FP limit,
    so larger gains need less work, not faster work. At 49152 the pass-2 rows (C = 256) could be
    16 × 16 instead of three radix-8/4 stages, and the pass-1 columns (R = 96) 16 × 6. Fewer
    stages means one less load/store sweep, and fewer twiddle multiplies per point ((r−1)/r per
@@ -36,7 +30,7 @@ the right count: 12 sustain ~6% less (see Tried and dropped).
    ops of a prototype kernel with `tools/count_ops.py` before building the rest: the target is
    ≥5% fewer ops in the stages it replaces (~2–3% of a squaring).
 
-3. **Per-test cache footprint, for the E-cluster and under the power cap.** Each test streams
+2. **Per-test cache footprint, for the E-cluster and under the power cap.** Each test streams
    ~3 MB per squaring from L2, about half of it tables (four-step 393 KB, normaliser 1.15 MB).
    The P-clusters have 16 MB of L2 for 5 tests each, but the E-cluster has 4 MB for 4 tests,
    so E-core tests probably go to the SLC every squaring. The L1-resident-tables bound
@@ -76,6 +70,13 @@ Below the bar on its own:
 - Exact fixed-point IBDWT weights, allowing a shorter FFT: −6% (`9dca186`).
 
 ## Tried and dropped
+
+- Normaliser carry-chain latency (2026-10-12, `docs/experiments/normbench.c`): not the limit any
+  more. On L1-resident data and table the 8-chain kernels run at the FP limit (`ao` 34.0 ns per
+  128 digits, 16.9 ops/ns; `aoe` 40.8 ns, 17.3 ops/ns), a floor of ~13.7 µs per squaring
+  against 17.0–18.4 µs in place. The difference is streaming its 1.15 MB table from L2, which
+  the 2026-10-11 L1-resident-tables bound already measured (0–2% under load). The table itself
+  is item 2's question.
 
 - Pass-1 inverse stages (2026-10-12, patch in `docs/experiments/p1-touch-before-inverse.patch`):
   their gap to the forward stages is the L2 load of each group, not the stages' code. With the

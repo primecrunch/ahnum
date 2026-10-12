@@ -1212,3 +1212,27 @@ their code. The cold load costs them 2.1 µs; doing it separately costs 2.9 µs,
 already hide part of it. The ceiling is 2.1 µs (1.8%) even if the load were free, below the 3%
 bar. Dropped; the patch is in `docs/experiments/p1-touch-before-inverse.patch`. The "80% of the
 FP limit" figure was this load, not slow kernels. The normaliser is next.
+
+## 2026-10-12 21:25 — Normaliser: at the FP limit on hot data
+
+The priorities file said the normaliser was still tied to its carry-chain latency. Counting
+`ahn_norm_ao`'s loop (`tools/count_ops.py`): 576 vector ops per 128 digits (448 FP + 128
+`trn`), 704 with the round-off check. A microbenchmark (`docs/experiments/normbench.c`) runs the
+kernel on one group with its data and table in L1:
+
+| Kernel | ns per 128 digits | ops/ns | µs per squaring |
+|---|---|---|---|
+| `ao` | 34.0–34.3 | 16.9 | 13.1 |
+| `aoe` | 40.8–42.1 | 17.3 | 15.7 |
+
+Both run at the measured FP ceiling (~16.5 ops/ns), so eight chains in flight already hide the
+fmla → frintn latency. With one squaring in four checking round-off the floor is ~13.7 µs; in
+place it takes 17.0–18.4. The gap is the 1.15 MB normaliser table streamed from L2 (the group's
+data is still in L1 from the inverse stages), which the 2026-10-11 L1-resident-tables run
+already bounded at 0–2% under load. Dropped. The `trn` shuffles are 22% of its ops, but they
+follow from the layout: the pass-1 FFT keeps one complex value per register, and the
+normaliser needs two rows' digits per register for two chains.
+
+That leaves one candidate on the list with a ceiling near 3%: radix-16 stages to cut FP work.
+Two of the three items ranked above it today turned out to be memory loads already measured,
+not slow code.
