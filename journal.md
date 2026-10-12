@@ -1144,3 +1144,15 @@ priority than CPU work that helps every machine. It may be revisited on the Mac 
 README now gives complete-test figures for the GPU rows, labels the speed history as
 one-round (~2 minute) figures, and adds the sustained 14-test number (~372 tests/hour); the
 priorities file moves the GPU item to an "On hold" section with these measurements.
+
+## 2026-10-12 12:40 — Next CPU candidates
+
+With the GPU on hold, the candidate list had one item left, below the bar (pass-2 rows in,
+~1.7%). Today's runs change what to rank against: the workload is 14 tests sustained on a
+power-limited laptop (P-cores ~2650 MHz, ~31 W), but every phase share and FP-limit figure in
+the file comes from one quiet core at ~4.2 GHz. The new list in
+`speed-improvement-priorities.md` starts with a profile under sustained load (step 0), then:
+test count and placement under the power cap (measurement only), per-test cache footprint for
+the 4 MB E-cluster L2, the pass-1 inverse stages (80% of the FP limit against 95% forward), the
+normaliser's carry-chain latency, and radix-16 stages to cut FP work in pass 1. None has a
+measured upper bound yet; each gets one before any code is written.
