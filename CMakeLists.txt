@@ -28,6 +28,8 @@ add_library(ahnum STATIC
   src/neon.c
   src/prp.c
   src/threads.c
+  src/md5.c
+  src/prstproof.c
 )
 target_include_directories(ahnum PUBLIC include PRIVATE src)
 
@@ -53,6 +55,10 @@ target_link_libraries(sweep_err ahnum)
 add_executable(ahbench tools/ahbench.c)
 target_link_libraries(ahbench ahnum)
 
+add_executable(ahprst tools/ahprst.c)
+target_include_directories(ahprst PRIVATE src)
+target_link_libraries(ahprst ahnum)
+
 add_executable(test_stages tests/test_stages.c)
 target_include_directories(test_stages PRIVATE src)
 target_link_libraries(test_stages ahnum)
@@ -61,6 +67,7 @@ add_test(NAME known_residues COMMAND ${CMAKE_SOURCE_DIR}/tests/run_known.sh $<TA
 add_test(NAME known_residues_threads COMMAND ${CMAKE_SOURCE_DIR}/tests/run_known.sh $<TARGET_FILE:ahbench> ${CMAKE_SOURCE_DIR}/tests/known_residues.csv 100000 --threads 2)
 add_test(NAME known_residues_long COMMAND ${CMAKE_SOURCE_DIR}/tests/run_known.sh $<TARGET_FILE:ahbench> ${CMAKE_SOURCE_DIR}/tests/known_residues.csv 1000000)
 set_tests_properties(known_residues_long PROPERTIES LABELS long)
+add_test(NAME prst_compat COMMAND ${CMAKE_SOURCE_DIR}/tests/prst_compat.sh $<TARGET_FILE:ahprst>)
 add_test(NAME gerbicz_fault COMMAND $<TARGET_FILE:ahbench> prp 1203 90001 --fault 50000 --expect 4BE9F1953E350085)
 
 add_executable(kbench tools/kbench.c)

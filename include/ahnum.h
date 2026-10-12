@@ -12,6 +12,8 @@
 extern "C" {
 #endif
 
+#define AHNUM_VERSION "0.1.0"
+
 typedef struct ahn_ctx ahn_ctx;
 typedef struct ahn_num ahn_num;
 
@@ -73,7 +75,20 @@ typedef struct {
     void (*progress)(void *arg, uint64_t iter, uint64_t n, double maxerr);
     void *progress_arg;
     uint64_t inject_fault_at;  // testing: corrupt the state at this iteration (0 = never)
+    // Proof points: ascending iteration positions (0..n) at which x_i is reported through
+    // on_point, only once a Gerbicz check (or the doubled tail) has verified it. Points at
+    // or before a resumed checkpoint are not reported again. A non-zero return stops the
+    // test with AHN_PRP_POINT_FAILED.
+    const uint32_t *points;
+    uint32_t npoints;
+    int (*on_point)(void *arg, uint32_t index, uint64_t iter, const uint64_t *limbs);
+    void *point_arg;
+    // When *abort_flag becomes non-zero the test writes a checkpoint at the last verified
+    // state and returns AHN_PRP_ABORTED.
+    volatile int *abort_flag;
 } ahn_prp_opts;
+
+enum { AHN_PRP_ABORTED = -5, AHN_PRP_POINT_FAILED = -6 };
 
 typedef struct {
     uint64_t res64;            // low 64 bits of base^(N-1) mod N
@@ -83,12 +98,17 @@ typedef struct {
     uint32_t gerbicz_errors;   // detected and recovered
     uint32_t roundoff_retries; // FFT length increases
     int resumed;               // started from a checkpoint
+    uint64_t resumed_at;       // iteration it resumed from
     double seconds;
 } ahn_prp_result;
 
 // Fermat PRP test of k*2^n-1 to the given base. Returns 0 on success (result
 // in *res), negative on failure.
 int ahn_prp(uint64_t k, uint64_t n, uint32_t base, const ahn_prp_opts *o, ahn_prp_result *res);
+
+// Iteration a checkpoint written by ahn_prp for this test resumes from. 0 on success.
+int ahn_prp_checkpoint_iter(const char *path, uint64_t k, uint64_t n, uint32_t base,
+                            uint64_t *iter);
 
 // Testing hook: perturb a number's internal representation.
 void ahn_debug_corrupt(ahn_ctx *ctx, ahn_num *x);

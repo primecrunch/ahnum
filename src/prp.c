@@ -200,6 +200,53 @@ static int ckpt_read(const char *path, uint64_t k, uint64_t n, uint32_t base, ui
     return 0;
 }
 
+// ---- proof points -----------------------------------------------------------
+
+// Points captured since the last verified state, reported once verified.
+typedef struct {
+    uint32_t *index;
+    uint64_t **limbs;
+    uint32_t count, cap;
+} pending_points;
+
+static void pending_clear(pending_points *p) {
+    for (uint32_t i = 0; i < p->count; i++) free(p->limbs[i]);
+    p->count = 0;
+}
+
+static void pending_add(pending_points *p, ahn_ctx *ctx, uint32_t index, const ahn_num *x) {
+    if (p->count == p->cap) {
+        p->cap = p->cap ? 2 * p->cap : 16;
+        p->index = realloc(p->index, p->cap * sizeof *p->index);
+        p->limbs = realloc(p->limbs, p->cap * sizeof *p->limbs);
+    }
+    p->index[p->count] = index;
+    p->limbs[p->count] = malloc(ahn_limbs(ctx) * 8);
+    ahn_get_limbs(ctx, x, p->limbs[p->count]);
+    p->count++;
+}
+
+static int pending_flush(pending_points *p, const ahn_prp_opts *o) {
+    int rc = 0;
+    for (uint32_t i = 0; i < p->count && !rc; i++)
+        rc = o->on_point(o->point_arg, p->index[i], o->points[p->index[i]], p->limbs[i]);
+    pending_clear(p);
+    return rc;
+}
+
+int ahn_prp_checkpoint_iter(const char *path, uint64_t k, uint64_t n, uint32_t base,
+                            uint64_t *iter) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    ckpt_hdr h;
+    int ok = fread(&h, sizeof h, 1, f) == 1 && !memcmp(h.magic, "AHNCKPT1", 8) && h.k == k &&
+             h.n == n && h.base == base;
+    fclose(f);
+    if (!ok) return -1;
+    *iter = h.iter;
+    return 0;
+}
+
 // ---- driver ---------------------------------------------------------------
 
 typedef struct {
@@ -293,6 +340,7 @@ int ahn_prp(uint64_t k, uint64_t n, uint32_t base, const ahn_prp_opts *opts,
     uint64_t *vx = calloc(nl, 8), *vd = calloc(nl, 8);  // last verified x, d
     uint64_t vi = 0;                                     // last verified iteration
     int rc = 0;
+    pending_points pend = {0};
 
     power_start(&s, k, base, la);
     ahn_get_limbs(s.ctx, s.x0, vx);
@@ -316,13 +364,33 @@ int ahn_prp(uint64_t k, uint64_t n, uint32_t base, const ahn_prp_opts *opts,
     uint64_t full = n / B * B;  // Gerbicz-protected part
     double last_ck = now();
     int consecutive_fail = 0;
+    res->resumed_at = vi;
+    uint32_t vp = 0;  // next point not yet reported
+    if (o.on_point) {
+        while (vp < o.npoints && o.points[vp] < vi + (vi > 0)) vp++;
+        if (vp < o.npoints && o.points[vp] == 0) {  // x_0 = base^k, checked by power_start
+            ahn_set_limbs(s.ctx, s.x, vx);
+            pending_add(&pend, s.ctx, vp++, s.x);
+            if (pending_flush(&pend, &o)) {
+                rc = AHN_PRP_POINT_FAILED;
+                goto out;
+            }
+        }
+    }
     for (;;) {
         // (re)start from the verified state
         ahn_set_limbs(s.ctx, s.x, vx);
         ahn_set_limbs(s.ctx, s.d, vd);
         ahn_reset_roundoff(s.ctx);
         uint64_t i = vi;
+        uint32_t pi = vp;
         int failed = 0, round_fail = 0;
+        pending_clear(&pend);
+        if (o.abort_flag && *o.abort_flag) {
+            if (o.checkpoint) ckpt_write(o.checkpoint, k, n, base, vi, ahn_fft_len(s.ctx), vx, vd, nl);
+            rc = AHN_PRP_ABORTED;
+            goto out;
+        }
         // run up to B blocks, keep d before the last update in t
         uint64_t check_at = vi + (uint64_t)B * M;
         if (check_at > full) check_at = full;
@@ -334,6 +402,7 @@ int ahn_prp(uint64_t k, uint64_t n, uint32_t base, const ahn_prp_opts *opts,
                     ahn_debug_corrupt(s.ctx, s.x);
                     o.inject_fault_at = 0;  // once
                 }
+                if (pi < o.npoints && o.points[pi] == i && o.on_point) pending_add(&pend, s.ctx, pi++, s.x);
             }
             if (i == check_at) ahn_copy(s.ctx, s.t, s.d);
             ahn_mul(s.ctx, s.d, s.x);
@@ -377,6 +446,11 @@ int ahn_prp(uint64_t k, uint64_t n, uint32_t base, const ahn_prp_opts *opts,
         ahn_get_limbs(s.ctx, s.x, vx);
         ahn_get_limbs(s.ctx, s.d, vd);
         vi = i;
+        vp = pi;
+        if (pend.count && pending_flush(&pend, &o)) {
+            rc = AHN_PRP_POINT_FAILED;
+            goto out;
+        }
         if (o.checkpoint && (now() - last_ck > ck_secs || vi == full)) {
             ckpt_write(o.checkpoint, k, n, base, vi, ahn_fft_len(s.ctx), vx, vd, nl);
             last_ck = now();
@@ -389,9 +463,25 @@ int ahn_prp(uint64_t k, uint64_t n, uint32_t base, const ahn_prp_opts *opts,
         for (int attempt = 0;; attempt++) {
             ahn_set_limbs(s.ctx, s.x, vx);
             ahn_set_limbs(s.ctx, s.t, vx);
-            ahn_square_n(s.ctx, s.x, tail);
-            ahn_square_n(s.ctx, s.t, tail);
-            if (nums_equal(s.ctx, s.x, s.t, la, lb)) break;
+            // stop at each point in the tail so it can be reported
+            uint64_t i = full;
+            uint32_t pi = vp;
+            pending_clear(&pend);
+            while (i < n) {
+                uint64_t next = n;
+                if (o.on_point && pi < o.npoints && o.points[pi] > i && o.points[pi] < next) next = o.points[pi];
+                ahn_square_n(s.ctx, s.x, next - i);
+                ahn_square_n(s.ctx, s.t, next - i);
+                i = next;
+                if (o.on_point && pi < o.npoints && o.points[pi] == i) pending_add(&pend, s.ctx, pi++, s.x);
+            }
+            if (nums_equal(s.ctx, s.x, s.t, la, lb)) {
+                if (pend.count && pending_flush(&pend, &o)) {
+                    rc = AHN_PRP_POINT_FAILED;
+                    goto out;
+                }
+                break;
+            }
             if (attempt > 5) {
                 rc = -3;
                 goto out;
@@ -419,6 +509,9 @@ int ahn_prp(uint64_t k, uint64_t n, uint32_t base, const ahn_prp_opts *opts,
     if (ahn_max_roundoff(s.ctx) > res->maxerr) res->maxerr = ahn_max_roundoff(s.ctx);
 out:
     res->seconds = now() - t_start;
+    pending_clear(&pend);
+    free(pend.index);
+    free(pend.limbs);
     state_free(&s);
     free(la);
     free(lb);

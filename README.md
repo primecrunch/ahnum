@@ -35,6 +35,23 @@ Options: `--threads T`, `--fft L` (force a length), `--order 0..3` (force an FFT
 `--ckpt FILE` / `--ckpt-secs S` (checkpoint/resume), `--block B` (Gerbicz block),
 `--fault ITER` (inject a digit error to exercise the Gerbicz check).
 
+## PRST-compatible CLI (`ahprst`)
+
+`build/ahprst` accepts a subset of PRST's command line for k·2^n − 1: Fermat tests, `-proof save/build/cert` and progress output, with checkpoints on SIGTERM.
+Other tests, LLR included, are passed to PRST (`$AHPRST_PRST`, or `prst` next to
+`ahprst`). Proof points, products and certificates are byte-identical to PRST 14.0's, and each
+program verifies the other's certificates; see `docs/prst-compat.md`.
+
+```sh
+build/ahprst "9001*2^2000003-1" -d -fermat a 3 -proof save 512
+build/ahprst "9001*2^2000003-1" -d -fermat a 3 -proof build 512
+build/ahprst "9001*2^2000003-1" -d -proof cert prst_<fingerprint>.cert
+```
+
+PRST is by Pavel Atnashev (https://github.com/patnashev/prst). The proof code in
+`src/prstproof.c` reimplements PRST's proof construction and file format so the two
+interoperate.
+
 ## Reference benchmark
 
 ```sh
