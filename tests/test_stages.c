@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/sysctl.h>
 
 #include "internal.h"
 #include "kernels.h"
@@ -175,10 +176,15 @@ int main(void) {
             }
         }
     }
-    // SME radix-8 stage vs the reference, layout b, both directions
+    // SME radix-8 stage vs the reference, layout b, both directions (M4 and later; the
+    // kernel is an illegal instruction elsewhere, so check as the SME backend does)
+    int sme = 0;
+    size_t sme_len = sizeof sme;
+    if (sysctlbyname("hw.optional.arm.FEAT_SME_F64F64", &sme, &sme_len, NULL, 0)) sme = 0;
+    if (!sme) printf("sme r8: skipped, no SME on this CPU\n");
     g_imoff = 8;
     g_lgstep = 16;
-    for (int dit = 0; dit < 2; dit++) {
+    for (int dit = 0; dit < 2 && sme; dit++) {
         for (int sv = 0; sv < 2; sv++) {
             size_t s = sv ? 5 : 2, nb = sv ? 2 : 3, es = 128 + 64, nlg = 4;
             size_t bs = 8 * s * es + 128, bytes = nb * bs + 128;
