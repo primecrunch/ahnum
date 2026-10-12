@@ -14,42 +14,25 @@ pass-2 forward and inverse stages ~11–12% each, split 10%, row transposes in/o
 ## Candidates
 
 The workload that matters is 14 tests running for hours on a machine that is power-limited
-(P-cores ~2650 MHz and ~31 W sustained, against ~4.2 GHz for one test alone). The time split
-and FP-limit figures above are from one quiet core, so step 0 is to remeasure them under that
-load. The ranking below may change once that is done.
+(P-cores ~2650 MHz and ~31 W sustained, against ~4.2 GHz for one test alone). Profiled under
+that load (2026-10-12), every phase slows by 1.73–1.96× (total 1.87×, 113 → 211 µs per
+squaring). FP-bound phases slow least (split 1.73×, p1 forward 1.79×); the normaliser (1.96×),
+p1 inverse (1.92×) and pass-2 rows in/out (1.90×) slow most, so their shares grow a little:
+p1 inverse 18.6%, normaliser 15.8%, rows in + out 14.2%. The ranking below follows it. 14 tests is
+the right count: 12 sustain ~6% less (see Tried and dropped).
 
-0. **Profile under sustained load.** Run `AHN_PROF=1` on one test while 13 others run, after
-   ~15 minutes of load, on a P-core and on an E-core. At 2650 MHz memory costs fewer cycles, and
-   5 tests share each P-cluster's L2, so the phase shares and FP-limit percentages may move. No
-   gain by itself; it decides the order of 2–5.
-
-1. **Number of tests and placement, sustained.** Every throughput figure so far has 10 or 14 tests
-   for ~2 minutes. Under a power cap, a test on an E-core uses power that would raise the P-cores'
-   clocks, and 10 tests on P-cores alone, or 12, may sustain more than 14. Measure
-   25-minute throughput at 10, 12 and 14 tests. Only measurements, no code; gain unknown,
-   0–5%. If fewer tests win, the README advice changes.
-
-2. **Per-test cache footprint, for the E-cluster and under the power cap.** Each test streams
-   ~3 MB per squaring from L2, about half of it tables (four-step 393 KB, normaliser 1.15 MB).
-   The P-clusters have 16 MB of L2 for 5 tests each, but the E-cluster has 4 MB for 4 tests,
-   so E-core tests probably go to the SLC every squaring. The L1-resident-tables bound
-   measured 0–2% for 2-minute runs on all 14 tests (2026-10-11). Remeasure it sustained, and
-   per E-core test, with the same wrong-results build. If the E-cores gain, the options are
-   smaller tables for E-core tests (computed twiddles, compressed weights), which cost FP work
-   on P-cores but may not on E-cores.
-
-3. **Pass-1 inverse stages (80% of the FP limit, 18% of the time).** The forward stages of the same
+1. **Pass-1 inverse stages (80% of the FP limit, 18% of the time).** The forward stages of the same
    pass reach 95%. Closing the gap would be ~3% of a squaring. Start by finding where the
    inverse stages lose time: the deferred first-group carry fix-up, the twiddle order, or stage
    order. `AHN_PROF` per stage would show it.
 
-4. **Normaliser (80% of its limit, 17% of the time).** After the in-place rewrite it is still
+2. **Normaliser (80% of its limit, 17% of the time).** After the in-place rewrite it is still
    tied to the carry-chain latency (fmla → frintn per digit). More chains in flight (4 → 8) or
    splitting each group's carries across two independent halves with a fix-up, as pass 1 does
    between threads, would give ~2–3% if it reaches the FP limit. Check first that it is still
    latency-bound at 2650 MHz, where the latency is the same in cycles but the time is longer.
 
-5. **Fewer FP operations: radix-16 stages.** Kernels already run at 80–95% of the FP limit,
+3. **Fewer FP operations: radix-16 stages.** Kernels already run at 80–95% of the FP limit,
    so larger gains need less work, not faster work. At 49152 the pass-2 rows (C = 256) could be
    16 × 16 instead of three radix-8/4 stages, and the pass-1 columns (R = 96) 16 × 6. Fewer
    stages means one less load/store sweep, and fewer twiddle multiplies per point ((r−1)/r per
@@ -57,6 +40,18 @@ load. The ranking below may change once that is done.
    values at 2 lanes with no room for twiddles, so it needs a 1-lane or split design. Count the
    ops of a prototype kernel with `tools/count_ops.py` before building the rest: the target is
    ≥5% fewer ops in the stages it replaces (~2–3% of a squaring).
+
+4. **Per-test cache footprint, for the E-cluster and under the power cap.** Each test streams
+   ~3 MB per squaring from L2, about half of it tables (four-step 393 KB, normaliser 1.15 MB).
+   The P-clusters have 16 MB of L2 for 5 tests each, but the E-cluster has 4 MB for 4 tests,
+   so E-core tests probably go to the SLC every squaring. The L1-resident-tables bound
+   measured 0–2% for 2-minute runs on all 14 tests (2026-10-11). Remeasure it sustained, and
+   per E-core test, with the same wrong-results build. If the E-cores gain, the options are
+   smaller tables for E-core tests (computed twiddles, compressed weights), which cost FP work
+   on P-cores but may not on E-cores.
+   Ranked last after the 2026-10-12 load profile: the load-heavy phases slowed 1.90× against
+   1.73–1.83× for the FP-bound ones, so memory costs only a little more under load. One cheap
+   sustained re-measure of the existing bound before any code.
 
 Below the bar on its own:
 
@@ -86,6 +81,11 @@ Below the bar on its own:
 - Exact fixed-point IBDWT weights, allowing a shorter FFT: −6% (`9dca186`).
 
 ## Tried and dropped
+
+- Fewer concurrent tests under the power cap (2026-10-12, 25-minute runs): 12 tests settle at
+  344–347 tests/hour against 366–372 for 14. Each test is faster (124.5 s against 137 s) but not
+  by enough. The scheduler moves tests between P- and E-cores, so 10 would not mean P-only; not
+  run.
 
 - Tangent-form twiddles in the forward (DIF) stages (2026-10-11, built, patch in
   `docs/experiments/dif-tangent-forward.patch`): −1.5% at 49152, ~0 at 28672 and 65536, +0.8%

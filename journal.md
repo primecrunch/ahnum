@@ -1156,3 +1156,40 @@ test count and placement under the power cap (measurement only), per-test cache 
 the 4 MB E-cluster L2, the pass-1 inverse stages (80% of the FP limit against 95% forward), the
 normaliser's carry-chain latency, and radix-16 stages to cut FP work in pass 1. None has a
 measured upper bound yet; each gets one before any code is written.
+
+## 2026-10-12 21:00 — Profile under load, and 14 vs 12 tests sustained
+
+Quiet single test, `AHN_PROF=1`: 75.5 s, 112.95 µs per squaring, the same split as before.
+Then 14 and 12 tests kept busy for 25 minutes each (quiet check and thermal pressure 0 before
+each), slot 1 profiled on every test. All 154 + 144 completed tests correct.
+
+Profile of slot 1, µs per squaring:
+
+| Phase | Quiet | 14 tests, round 1 | round 6 | round 11 | round 11 / quiet |
+|---|---|---|---|---|---|
+| p1 inverse stages | 20.44 | 33.99 | 37.48 | 39.15 | 1.92 |
+| p1 normalise | 17.02 | 28.94 | 32.08 | 33.41 | 1.96 |
+| p1 forward stages | 19.13 | 29.83 | 32.87 | 34.22 | 1.79 |
+| p2 rows in | 8.39 | 13.80 | 15.23 | 15.92 | 1.90 |
+| p2 fwd stages | 13.63 | 21.60 | 23.97 | 25.01 | 1.83 |
+| p2 split | 13.01 | 19.53 | 21.64 | 22.54 | 1.73 |
+| p2 inv stages | 12.15 | 19.96 | 22.21 | 23.13 | 1.90 |
+| p2 rows out | 7.35 | 12.11 | 13.36 | 13.93 | 1.90 |
+| total | 112.95 | 182.79 | 202.20 | 210.80 | 1.87 |
+
+Every phase slows by about the same factor. The FP-bound ones slow least, as they would with a
+lower clock; the normaliser (latency-bound), the p1 inverse stages and the pass-2 row loads
+slow most, so they gain a little share. No phase becomes a new bottleneck, and memory traffic
+costs only a little more under load, which fits the 0–2% table bound from 2026-10-11.
+
+Test count: 14 tests settle at 366–372 tests/hour (137 s each by round 11), 12 tests at 344–347
+(124.5 s each). The faster tests do not make up for two fewer, so the E-cores are worth running
+even under the power cap. The 12-test run started 4 minutes after the 14-test one, warmer, but
+the settled rounds compare like with like. The 10-test run was dropped: the trend was clear,
+and the scheduler moves tests between clusters, so 10 tests would not have meant P-cores only.
+
+The priorities file now carries the under-load profile, drops items 0 and 1, and keeps the
+cache footprint, p1 inverse stages, normaliser and radix-16 items in that order.
+On reflection the cache-footprint item goes to the bottom of the list: the under-load profile
+is the evidence against it. Next is the pass-1 inverse stages, the largest phase (18.6% under
+load) and at ~80% of the FP limit against 95% for the forward stages of the same pass.
