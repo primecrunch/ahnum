@@ -1236,3 +1236,23 @@ normaliser needs two rows' digits per register for two chains.
 That leaves one candidate on the list with a ceiling near 3%: radix-16 stages to cut FP work.
 Two of the three items ranked above it today turned out to be memory loads already measured,
 not slow code.
+
+## 2026-10-12 21:40 — Radix-16: counted, no saving
+
+Op counts of the generated kernels (`tools/count_ops.py`), vector ops per butterfly: radix-8
+no-twiddle 56, tangent 66; radix-4 no-twiddle 16, tangent 22. One complex value per register,
+so the counts track real flops. A 16-point DFT needs 168 real flops (144 adds, 24 multiplies),
+2.63 per point per bit, against 2.33 for 8 points. Radix-16 cuts the outer twiddles from 0.29
+to 0.23 per point per bit, about 0.08 ops at ~1.4 per tangent twiddle, which does not cover the
+butterfly's extra 13%. For the 256-point pass-2 rows, today's 8 × 8 × 4 costs ≈ 20.75 ops per
+point and 16 × 16 ≈ 21.1. The sweep it would remove runs over rows in L1. Dropped.
+
+The earlier note in the priorities file, that 16 complex values would not fit NEON's registers,
+was wrong: the kernels hold one complex value per q register, so 16 fit with room to spare. It
+was not the reason to drop it.
+
+The list is now down to items with measured or estimated ceilings of 0–2% each: per-test
+cache footprint (tables), pass-2 rows in (~1.7%), and the pass-1 group load (1.8%, but a
+separate read costs more than it saves). The kernels run at 80–95% of the FP limit and the
+rest is L2 traffic that is cheap under load. The next gains need either a lower bar with
+several 1–2% items stacked, or a change at the algorithm level.

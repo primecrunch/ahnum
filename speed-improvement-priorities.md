@@ -21,16 +21,7 @@ p1 inverse (1.92×) and pass-2 rows in/out (1.90×) slow most, so their shares g
 p1 inverse 18.6%, normaliser 15.8%, rows in + out 14.2%. The ranking below follows it. 14 tests is
 the right count: 12 sustain ~6% less (see Tried and dropped).
 
-1. **Fewer FP operations: radix-16 stages.** Kernels already run at 80–95% of the FP limit,
-   so larger gains need less work, not faster work. At 49152 the pass-2 rows (C = 256) could be
-   16 × 16 instead of three radix-8/4 stages, and the pass-1 columns (R = 96) 16 × 6. Fewer
-   stages means one less load/store sweep, and fewer twiddle multiplies per point ((r−1)/r per
-   stage: 0.23 per bit at radix 16 against 0.29 at radix 8). NEON's 32 registers hold 16 complex
-   values at 2 lanes with no room for twiddles, so it needs a 1-lane or split design. Count the
-   ops of a prototype kernel with `tools/count_ops.py` before building the rest: the target is
-   ≥5% fewer ops in the stages it replaces (~2–3% of a squaring).
-
-2. **Per-test cache footprint, for the E-cluster and under the power cap.** Each test streams
+1. **Per-test cache footprint, for the E-cluster and under the power cap.** Each test streams
    ~3 MB per squaring from L2, about half of it tables (four-step 393 KB, normaliser 1.15 MB).
    The P-clusters have 16 MB of L2 for 5 tests each, but the E-cluster has 4 MB for 4 tests,
    so E-core tests probably go to the SLC every squaring. The L1-resident-tables bound
@@ -70,6 +61,12 @@ Below the bar on its own:
 - Exact fixed-point IBDWT weights, allowing a shorter FFT: −6% (`9dca186`).
 
 ## Tried and dropped
+
+- Radix-16 stages (2026-10-12, counted, not built): the kernels keep one complex value per
+  register, so ops track real flops. A 16-point DFT needs 168 real flops (2.63 per point per
+  bit) against 56 for 8 points (2.33), and the fewer outer twiddles (0.23 against 0.29 per point
+  per bit, ~1.4 ops each in tangent form) win back only ~0.08. Pass-2 rows of 256: 8 × 8 × 4 is
+  ≈ 20.75 ops per point, 16 × 16 ≈ 21.1. The sweep it removes is over rows already in L1.
 
 - Normaliser carry-chain latency (2026-10-12, `docs/experiments/normbench.c`): not the limit any
   more. On L1-resident data and table the 8-chain kernels run at the FP limit (`ao` 34.0 ns per
