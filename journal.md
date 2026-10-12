@@ -1388,3 +1388,23 @@ own SME backend already checks `hw.optional.arm.FEAT_SME_F64F64`; the test now d
 and skips that part. Second run: all 11 tests pass on macOS 14.8.9 (AppleClang 15) and
 macOS 15.7.9 (AppleClang 17), both "Apple M1 (Virtual)". The library and ahprst needed no
 change for M1 or the older macOS and compilers.
+
+## 2026-10-12 22:30 — Renamed: kite and kite-prst
+
+ahnum is now kite: the library `libkite.a` (header `include/kite.h`), the benchmark command
+`kite` (was ahbench) and the PRST-compatible command `kite-prst` (was ahprst), with banner
+`kite version 0.1.0`. The name comes from the red kite, a raptor that lives largely on
+carrion. The name is free on Homebrew and under primecrunch on GitHub;
+several unrelated projects use "Kite", none in prime searching. `kite-prst` keeps a separate
+name so it is clear it speaks PRST's command line without being PRST.
+
+Changed with it: `$AHPRST_PRST` → `$KITE_PRST`, checkpoint files `kite_FP.A.ckpt` (tag
+`KITECKP1`, so old checkpoints do not resume), tuning file `~/.kite/fft_times.txt`, and the
+whole C namespace: 140 `ahn_` names (971 uses in 29 files, including the generated assembly
+symbols) became `kite_`, and the 28 `AHN_` names (backend enum, result codes, header guards,
+the `AHN_PROF` / `AHN_FFT_TIMES` / `AHN_NO_TAN` style switches) became `KITE_`. The library
+exports 152 `kite_` symbols and none with the old prefix; the 11 tests pass, and the GPU
+prototypes build against `libkite.a` and give the right residue. This journal's earlier
+entries and the patches in `docs/experiments/` keep the old names as written.
+The CMake library target is `kitelib` with output name `kite`, because target names must be
+unique and the command is `kite`.

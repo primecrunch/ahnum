@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate AArch64 NEON kernels for ahnum (Apple Mach-O assembler syntax).
+"""Generate AArch64 NEON kernels for kite (Apple Mach-O assembler syntax).
 
 Data format: a complex "element" is one lane-group of 32 bytes,
     [re lane0, re lane1][im lane0, im lane1]
@@ -7,17 +7,17 @@ so each complex value occupies two vector registers (re, im), two lanes each.
 
 FFT stage kernels (radix p in 2,3,4,5,7,8), all unnormalised:
 
-  void ahn_dif_r{p}(double *base, size_t estride, size_t nlg, size_t nblocks,
+  void kite_dif_r{p}(double *base, size_t estride, size_t nlg, size_t nblocks,
                     size_t bstride, size_t s, const double *tw)
       for each block b, j < s, lane-group lg < nlg:
         elements t < p at base + b*bstride + j*estride + t*s*estride + lg*32
         y = DFT_p(x) (forward, e^{-2 pi i/p}); y_t *= tw[j][t-1]  (t >= 1)
       tw[j] holds p-1 packed complex [re, im] doubles.
-  ahn_dif_r{p}_notw: same without twiddles (s == 1 or j == 0 only use).
-  ahn_dif_r{p}_t4(base, estride, nlg, nblocks, bstride, delta):
+  kite_dif_r{p}_notw: same without twiddles (s == 1 or j == 0 only use).
+  kite_dif_r{p}_t4(base, estride, nlg, nblocks, bstride, delta):
       s == 1, no stage twiddles; y_t is multiplied element-wise by the complex
       vector stored at (address of y_t) + delta (four-step twiddle table).
-  ahn_dit_r{p}, ahn_dit_r{p}_notw, ahn_dit_r{p}_t4: inverse: inputs are first
+  kite_dit_r{p}, kite_dit_r{p}_notw, kite_dit_r{p}_t4: inverse: inputs are first
       multiplied by conj(twiddle), then inverse DFT_p.
 
 Usage: gen_kernels.py OUTDIR
@@ -27,7 +27,7 @@ import os
 import struct
 import sys
 
-PREFIX = "_ahn_"
+PREFIX = "_kite_"
 
 
 def dbl(x):
@@ -232,7 +232,7 @@ class Fft:
 # register copies are eliminated at rename), and each c_t is carried as a known
 # scale on the value until a butterfly folds it into its own FMAs: (a, b) with
 # scales (sa, sb) gives a +- (sb/sa) b with scale sa. The scalar order per j
-# below matches ahn_tan_table (src/neon.c); an exact cos = 0 is stored as
+# below matches kite_tan_table (src/neon.c); an exact cos = 0 is stored as
 # c = 2^-60 (the stray c * x term is far below rounding).
 TAN_NSCAL = {2: 2, 3: 6, 4: 6, 8: 16}
 
@@ -562,7 +562,7 @@ def gen_norm(g, mode, err):
     """Pass-1 normalisation for one group with compressed weights, one row pair
     per iteration (the table-driven variants are gen_norm_tab).
 
-    double ahn_norm_{a,b,c}[e](double *gbase, size_t rowstride, size_t npairs,
+    double kite_norm_{a,b,c}[e](double *gbase, size_t rowstride, size_t npairs,
                                   double *carry, const double *A, const double *IA,
                                   const uint64_t *mask, const double *consts)
     gbase points at the first row of the group: one 8-column block (layout b,
@@ -665,8 +665,8 @@ def gen_norm(g, mode, err):
 
 def gen_norm_tab(g, mode, err, P):
     """Table-driven normalisation, P row pairs (2P rows) per iteration, each pair
-    its own carry chain. Same ABI as ahn_norm_*; npairs must be a multiple of P.
-    Name: ahn_norm_{a,b,c}{t,q,o}[e] for P = 1, 2, 4.
+    its own carry chain. Same ABI as kite_norm_*; npairs must be a multiple of P.
+    Name: kite_norm_{a,b,c}{t,q,o}[e] for P = 1, 2, 4.
 
     A points at 16 records per row pair of {osc[2], ib[2], bw[2]} (48 bytes;
     768 bytes per pair), ib = 1/base, bw = base * w. Each digit is worked in
@@ -784,8 +784,8 @@ def gen_norm_tab(g, mode, err, P):
 
 
 def gen_rows(g):
-    """void ahn_rows_in(const double *rp, const double *rpp, double *scr, size_t C)
-       void ahn_rows_out(double *rp, double *rpp, const double *scr, size_t C)
+    """void kite_rows_in(const double *rp, const double *rpp, double *scr, size_t C)
+       void kite_rows_out(double *rp, double *rpp, const double *scr, size_t C)
     Transpose between two rows in layout b (8-column blocks [re c0..c7][im c0..c7])
     and the pass-2 scratch in layout a (element q = [re_p, re_pp][im_p, im_pp]).
     C must be a multiple of 8."""
@@ -842,19 +842,19 @@ def gen_rows(g):
 def gen_rows_stage(g, direction, tan=False):
     """First row-FFT stage fused with the row-pair transpose (pass 2).
 
-    void ahn_dif_r4_rows(const double *rp, const double *rpp, double *scr, size_t C,
+    void kite_dif_r4_rows(const double *rp, const double *rpp, double *scr, size_t C,
                          const double *tw)
         Radix-4 DIF stage with s = C/4 reading rows p and p' (layout b) and
-        writing the pair scratch (layout a): equivalent to ahn_rows_in followed
-        by ahn_dif_r4 on the scratch.
-    void ahn_dit_r4_rows(double *rp, double *rpp, const double *scr, size_t C,
+        writing the pair scratch (layout a): equivalent to kite_rows_in followed
+        by kite_dif_r4 on the scratch.
+    void kite_dit_r4_rows(double *rp, double *rpp, const double *scr, size_t C,
                          const double *tw)
-        The matching last inverse stage: ahn_dit_r4 on the scratch followed by
-        ahn_rows_out.
+        The matching last inverse stage: kite_dit_r4 on the scratch followed by
+        kite_rows_out.
     tw: the stage's twiddle table (3 packed complex per j). Butterflies j and
     j+1 are processed together, so one 16-byte row load covers both columns.
     C must be a multiple of 8.
-    tan (DIT only, suffix _tan): tw is the tangent-form table (ahn_tan_table,
+    tan (DIT only, suffix _tan): tw is the tangent-form table (kite_tan_table,
     6 scalars per j), as in the 'tan' stage kernels.
     """
     E = g.emit
@@ -960,7 +960,7 @@ def gen_rows_stage(g, direction, tan=False):
 
 
 def gen_split_sq(g):
-    """void ahn_split_sq(double *scr, size_t C, const double *rs, const double *cs)
+    """void kite_split_sq(double *scr, size_t C, const double *rs, const double *cs)
     General row pair (lanes p, p'): lane l at q pairs with lane 1-l at C-1-q.
     rs = {rsr_p, rsr_p', rsi_p, rsi_p'} (w_H^{k_r} per lane), cs[q] = packed
     w_C^{k_c(q)}. Squares in the frequency domain (see neon.c split1)."""
@@ -1024,7 +1024,7 @@ def gen_split_sq(g):
 
 
 def gen_cmul_b(g, conj):
-    """void ahn_cmul{c}_b(double *base, size_t estride, size_t n, ptrdiff_t delta)
+    """void kite_cmul{c}_b(double *base, size_t estride, size_t n, ptrdiff_t delta)
     Multiply n layout-b elements (8 lanes) at base + i*estride by the complex
     values at the same address + delta (conjugated for the 'c' variant)."""
     E = g.emit
@@ -1059,7 +1059,7 @@ def gen_cmul_b(g, conj):
 def gen_sme_r8(g):
     """Radix-8 FFT stage on the SME unit (FP64 outer products), layout b.
 
-    void ahn_sme_r8(double *base, size_t estride, size_t nblocks, size_t bstride,
+    void kite_sme_r8(double *base, size_t estride, size_t nblocks, size_t bstride,
                     size_t s, const double *mats)
     Items are (block b, position j); item elements u < 8 are 8-lane blocks
     (128 bytes: re[8], im[8]) at base + b*bstride + j*estride + u*s*estride.

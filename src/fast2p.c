@@ -237,7 +237,7 @@ static int choose_shape(uint32_t H, uint32_t *R, uint32_t *C) {
     return 0;
 }
 
-static int f2_init(ahn_ctx *ctx) {
+static int f2_init(kite_ctx *ctx) {
     if (ctx->L % 32) return -1;
     f2_state *st = calloc(1, sizeof *st);
     if (!st) return -1;
@@ -279,22 +279,22 @@ static int f2_init(ahn_ctx *ctx) {
         st->csr[q] = __cospi(a);
         st->csi[q] = -__sinpi(a);
     }
-    st->sre = ahn_alloc((size_t)R * G * sizeof(double));
-    st->sim = ahn_alloc((size_t)R * G * sizeof(double));
-    st->g0 = ahn_alloc((size_t)R * 2 * G * sizeof(double));
-    st->carry = ahn_alloc(R * sizeof(int64_t));
-    st->rre = ahn_alloc(C * sizeof(double));
-    st->rim = ahn_alloc(C * sizeof(double));
-    st->pre = ahn_alloc(C * sizeof(double));
-    st->pim = ahn_alloc(C * sizeof(double));
-    st->yre = ahn_alloc((size_t)H * sizeof(double));
-    st->yim = ahn_alloc((size_t)H * sizeof(double));
+    st->sre = kite_alloc((size_t)R * G * sizeof(double));
+    st->sim = kite_alloc((size_t)R * G * sizeof(double));
+    st->g0 = kite_alloc((size_t)R * 2 * G * sizeof(double));
+    st->carry = kite_alloc(R * sizeof(int64_t));
+    st->rre = kite_alloc(C * sizeof(double));
+    st->rim = kite_alloc(C * sizeof(double));
+    st->pre = kite_alloc(C * sizeof(double));
+    st->pim = kite_alloc(C * sizeof(double));
+    st->yre = kite_alloc((size_t)H * sizeof(double));
+    st->yim = kite_alloc((size_t)H * sizeof(double));
     st->scale_sq = 1.0 / (4.0 * H);
     ctx->num_doubles = ctx->L;
     return 0;
 }
 
-static void f2_free(ahn_ctx *ctx) {
+static void f2_free(kite_ctx *ctx) {
     f2_state *st = ctx->bk;
     plan_free(&st->pr);
     plan_free(&st->pc);
@@ -305,16 +305,16 @@ static void f2_free(ahn_ctx *ctx) {
     free(st->csr);
     free(st->csi);
     free(st->partner);
-    ahn_free_aligned(st->sre);
-    ahn_free_aligned(st->sim);
-    ahn_free_aligned(st->g0);
-    ahn_free_aligned(st->carry);
-    ahn_free_aligned(st->rre);
-    ahn_free_aligned(st->rim);
-    ahn_free_aligned(st->pre);
-    ahn_free_aligned(st->pim);
-    ahn_free_aligned(st->yre);
-    ahn_free_aligned(st->yim);
+    kite_free_aligned(st->sre);
+    kite_free_aligned(st->sim);
+    kite_free_aligned(st->g0);
+    kite_free_aligned(st->carry);
+    kite_free_aligned(st->rre);
+    kite_free_aligned(st->rim);
+    kite_free_aligned(st->pre);
+    kite_free_aligned(st->pim);
+    kite_free_aligned(st->yre);
+    kite_free_aligned(st->yim);
     free(st);
     ctx->bk = NULL;
 }
@@ -374,7 +374,7 @@ static inline size_t digit_of(const f2_state *st, uint32_t r, uint32_t c, uint32
 }
 
 // Round scratch (scaled) values of row r into 2G integer digits, carrying.
-static int64_t row_round_carry(ahn_ctx *ctx, f2_state *st, uint32_t g, uint32_t r, double scale,
+static int64_t row_round_carry(kite_ctx *ctx, f2_state *st, uint32_t g, uint32_t r, double scale,
                                int64_t carry, int64_t *dig, double *maxerr) {
     for (uint32_t l = 0; l < G; l++) {
         for (uint32_t h = 0; h < 2; h++) {
@@ -393,7 +393,7 @@ static int64_t row_round_carry(ahn_ctx *ctx, f2_state *st, uint32_t g, uint32_t 
     return carry;
 }
 
-static void row_weight_store(ahn_ctx *ctx, f2_state *st, uint32_t g, uint32_t r,
+static void row_weight_store(kite_ctx *ctx, f2_state *st, uint32_t g, uint32_t r,
                              const int64_t *dig) {
     for (uint32_t l = 0; l < G; l++) {
         st->sre[r * G + l] = (double)dig[2 * l] * ctx->w[digit_of(st, r, g * G + l, 0)];
@@ -403,7 +403,7 @@ static void row_weight_store(ahn_ctx *ctx, f2_state *st, uint32_t g, uint32_t r,
 
 // Add carry into the 2G digits starting at the group's first column; the last
 // digit absorbs any remainder.
-static void absorb_carry(const ahn_ctx *ctx, const f2_state *st, uint32_t r, uint32_t g,
+static void absorb_carry(const kite_ctx *ctx, const f2_state *st, uint32_t r, uint32_t g,
                          int64_t *dig, int64_t carry) {
     for (uint32_t i = 0; i < 2 * G && carry; i++) {
         if (i == 2 * G - 1) {
@@ -419,7 +419,7 @@ static void absorb_carry(const ahn_ctx *ctx, const f2_state *st, uint32_t r, uin
 }
 
 // Fold for the top region, operating on the last group's last row digits.
-static int64_t fold_last_row(const ahn_ctx *ctx, int64_t *dig, int64_t c) {
+static int64_t fold_last_row(const kite_ctx *ctx, int64_t *dig, int64_t c) {
     // dig holds digits L-2G .. L-1
     uint32_t L = ctx->L, t = ctx->top_t, base = L - 2 * G;
     __int128 Hh = (__int128)c << (ctx->sL - ctx->top_st);
@@ -451,7 +451,7 @@ static int64_t fold_last_row(const ahn_ctx *ctx, int64_t *dig, int64_t c) {
 }
 
 // Full pass 1 on data that has just finished pass 2.
-static void pass1(ahn_ctx *ctx, double *d) {
+static void pass1(kite_ctx *ctx, double *d) {
     f2_state *st = ctx->bk;
     uint32_t R = st->R, NG = st->ngroups;
     double scale = st->scale_sq, maxerr = ctx->maxerr;
@@ -542,7 +542,7 @@ static inline void split_op(double *ar, double *ai, double *br, double *bi, doub
     *bi = -Xi + Yr;
 }
 
-static void pass2(ahn_ctx *ctx, double *d, int mul) {
+static void pass2(kite_ctx *ctx, double *d, int mul) {
     f2_state *st = ctx->bk;
     uint32_t R = st->R, C = st->C;
     for (uint32_t p = 0; p < R; p++) {
@@ -618,7 +618,7 @@ static void pass2(ahn_ctx *ctx, double *d, int mul) {
 
 // ---- backend ops -------------------------------------------------------------
 
-static void f2_from_digits(ahn_ctx *ctx, ahn_num *x, const int64_t *dig) {
+static void f2_from_digits(kite_ctx *ctx, kite_num *x, const int64_t *dig) {
     f2_state *st = ctx->bk;
     for (uint32_t g = 0; g < st->ngroups; g++) {
         for (uint32_t r = 0; r < st->R; r++) {
@@ -633,7 +633,7 @@ static void f2_from_digits(ahn_ctx *ctx, ahn_num *x, const int64_t *dig) {
     }
 }
 
-static void f2_to_digits(ahn_ctx *ctx, const ahn_num *x, int64_t *dig) {
+static void f2_to_digits(kite_ctx *ctx, const kite_num *x, int64_t *dig) {
     f2_state *st = ctx->bk;
     for (uint32_t g = 0; g < st->ngroups; g++) {
         group_load(st, x->d, g);
@@ -648,12 +648,12 @@ static void f2_to_digits(ahn_ctx *ctx, const ahn_num *x, int64_t *dig) {
     }
 }
 
-static void f2_square(ahn_ctx *ctx, ahn_num *x) {
+static void f2_square(kite_ctx *ctx, kite_num *x) {
     pass2(ctx, x->d, 0);
     pass1(ctx, x->d);
 }
 
-static void f2_mul(ahn_ctx *ctx, ahn_num *x, const ahn_num *y) {
+static void f2_mul(kite_ctx *ctx, kite_num *x, const kite_num *y) {
     f2_state *st = ctx->bk;
     for (uint32_t p = 0; p < st->R; p++) {
         double *yr = st->yre + (size_t)p * st->C, *yi = st->yim + (size_t)p * st->C;
@@ -664,15 +664,15 @@ static void f2_mul(ahn_ctx *ctx, ahn_num *x, const ahn_num *y) {
     pass1(ctx, x->d);
 }
 
-static void f2_mul_small(ahn_ctx *ctx, ahn_num *x, int64_t m) {
+static void f2_mul_small(kite_ctx *ctx, kite_num *x, int64_t m) {
     int64_t *dig = ctx->tmpdig;
     f2_to_digits(ctx, x, dig);
     for (uint32_t j = 0; j < ctx->L; j++) dig[j] *= m;
-    ahn_carry_digits(ctx, dig);
+    kite_carry_digits(ctx, dig);
     f2_from_digits(ctx, x, dig);
 }
 
-const ahn_backend_ops ahn_f2_ops = {
+const kite_backend_ops kite_f2_ops = {
     .name = "c2pass",
     .init = f2_init,
     .free = f2_free,

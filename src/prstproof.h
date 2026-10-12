@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 
-#include "ahnum.h"
+#include "kite.h"
 
 // A non-negative integer as PRST stores it: little-endian 32-bit words, no leading zeros.
 typedef struct {
@@ -35,21 +35,21 @@ int pp_read(const char *path, int type, uint32_t fingerprint, int32_t *iteration
 // Returns PRST's M (the spacing it reports).
 int pp_points(uint32_t iterations, int count, uint32_t *pos);
 
-// Conversions between an ahnum number and a giant (value in [0, N)).
-void pp_from_num(ahn_ctx *ctx, const ahn_num *x, pp_giant *g);
-void pp_to_num(ahn_ctx *ctx, const pp_giant *g, ahn_num *x);
+// Conversions between a kite number and a giant (value in [0, N)).
+void pp_from_num(kite_ctx *ctx, const kite_num *x, pp_giant *g);
+void pp_to_num(kite_ctx *ctx, const pp_giant *g, kite_num *x);
 uint64_t pp_res64(const pp_giant *g);
 
 // `prefix` is "prst_<fp>" in the working directory.
 // Save step: points 0..count are on disk; writes the products and returns the raw
 // certificate RES64. Deletes points 1..count-1 unless keep.
-int pp_save_products(ahn_ctx *ctx, uint64_t k, uint64_t n, uint32_t a, int count,
+int pp_save_products(kite_ctx *ctx, uint64_t k, uint64_t n, uint32_t a, int count,
                      const char *prefix, int keep, uint64_t *raw_res64);
 // Build step: checks point 0 = a^k, writes prefix.cert, returns the certificate RES64.
 // Deletes points 0 and count and the products unless keep.
-int pp_build_cert(ahn_ctx *ctx, uint64_t k, uint64_t n, uint32_t a, int count,
+int pp_build_cert(kite_ctx *ctx, uint64_t k, uint64_t n, uint32_t a, int count,
                   const char *prefix, int keep, uint64_t *cert_res64);
 // Verify: reads a certificate, squares its value M times with a Gerbicz check and returns
 // the RES64 PRST prints as "certificate RES64".
-int pp_verify_cert(ahn_ctx *ctx, uint64_t k, uint64_t n, const char *path, uint64_t *cert_res64,
+int pp_verify_cert(kite_ctx *ctx, uint64_t k, uint64_t n, const char *path, uint64_t *cert_res64,
                    uint32_t *M);

@@ -47,13 +47,13 @@ static void fft_rec(const ref_state *st, uint32_t L, const cplx *in, size_t istr
     if (p > 8) free(tp);
 }
 
-static int ref_init(ahn_ctx *ctx) {
+static int ref_init(kite_ctx *ctx) {
     ref_state *st = calloc(1, sizeof *st);
     if (!st) return -1;
     uint32_t L = ctx->L;
-    st->tw = ahn_alloc(L * sizeof(cplx));
-    st->a = ahn_alloc(L * sizeof(cplx));
-    st->b = ahn_alloc(L * sizeof(cplx));
+    st->tw = kite_alloc(L * sizeof(cplx));
+    st->a = kite_alloc(L * sizeof(cplx));
+    st->b = kite_alloc(L * sizeof(cplx));
     ctx->bk = st;
     if (!st->tw || !st->a || !st->b) return -1;
     for (uint32_t j = 0; j < L; j++) {
@@ -64,24 +64,24 @@ static int ref_init(ahn_ctx *ctx) {
     return 0;
 }
 
-static void ref_free(ahn_ctx *ctx) {
+static void ref_free(kite_ctx *ctx) {
     ref_state *st = ctx->bk;
-    ahn_free_aligned(st->tw);
-    ahn_free_aligned(st->a);
-    ahn_free_aligned(st->b);
+    kite_free_aligned(st->tw);
+    kite_free_aligned(st->a);
+    kite_free_aligned(st->b);
     free(st);
     ctx->bk = NULL;
 }
 
-static void ref_to_digits(ahn_ctx *ctx, const ahn_num *x, int64_t *dig) {
+static void ref_to_digits(kite_ctx *ctx, const kite_num *x, int64_t *dig) {
     for (uint32_t j = 0; j < ctx->L; j++) dig[j] = (int64_t)x->d[j];
 }
 
-static void ref_from_digits(ahn_ctx *ctx, ahn_num *x, const int64_t *dig) {
+static void ref_from_digits(kite_ctx *ctx, kite_num *x, const int64_t *dig) {
     for (uint32_t j = 0; j < ctx->L; j++) x->d[j] = (double)dig[j];
 }
 
-static void forward(ahn_ctx *ctx, const ahn_num *x, cplx *dst) {
+static void forward(kite_ctx *ctx, const kite_num *x, cplx *dst) {
     ref_state *st = ctx->bk;
     uint32_t L = ctx->L;
     cplx *in = st->b == dst ? st->a : st->b;
@@ -91,7 +91,7 @@ static void forward(ahn_ctx *ctx, const ahn_num *x, cplx *dst) {
 
 // dst holds the pointwise product in the frequency domain; finish the
 // inverse transform, unweight, round, and carry into x.
-static void inverse_carry(ahn_ctx *ctx, cplx *prod, ahn_num *x) {
+static void inverse_carry(kite_ctx *ctx, cplx *prod, kite_num *x) {
     ref_state *st = ctx->bk;
     uint32_t L = ctx->L;
     cplx *out = prod == st->a ? st->b : st->a;
@@ -107,18 +107,18 @@ static void inverse_carry(ahn_ctx *ctx, cplx *prod, ahn_num *x) {
         dig[j] = (int64_t)r;
     }
     ctx->maxerr = maxerr;
-    ahn_carry_digits(ctx, dig);
+    kite_carry_digits(ctx, dig);
     ref_from_digits(ctx, x, dig);
 }
 
-static void ref_square(ahn_ctx *ctx, ahn_num *x) {
+static void ref_square(kite_ctx *ctx, kite_num *x) {
     ref_state *st = ctx->bk;
     forward(ctx, x, st->a);
     for (uint32_t j = 0; j < ctx->L; j++) st->a[j] *= st->a[j];
     inverse_carry(ctx, st->a, x);
 }
 
-static void ref_mul(ahn_ctx *ctx, ahn_num *x, const ahn_num *y) {
+static void ref_mul(kite_ctx *ctx, kite_num *x, const kite_num *y) {
     ref_state *st = ctx->bk;
     uint32_t L = ctx->L;
     cplx *fy = malloc(L * sizeof(cplx));
@@ -130,15 +130,15 @@ static void ref_mul(ahn_ctx *ctx, ahn_num *x, const ahn_num *y) {
     inverse_carry(ctx, st->a, x);
 }
 
-static void ref_mul_small(ahn_ctx *ctx, ahn_num *x, int64_t m) {
+static void ref_mul_small(kite_ctx *ctx, kite_num *x, int64_t m) {
     int64_t *dig = ctx->tmpdig;
     ref_to_digits(ctx, x, dig);
     for (uint32_t j = 0; j < ctx->L; j++) dig[j] *= m;
-    ahn_carry_digits(ctx, dig);
+    kite_carry_digits(ctx, dig);
     ref_from_digits(ctx, x, dig);
 }
 
-const ahn_backend_ops ahn_ref_ops = {
+const kite_backend_ops kite_ref_ops = {
     .name = "ref",
     .init = ref_init,
     .free = ref_free,

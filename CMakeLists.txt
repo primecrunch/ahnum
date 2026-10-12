@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 # macOS 11 is the first release for Apple Silicon; nothing here needs a newer one.
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
-project(ahnum C ASM)
+project(kite C ASM)
 
 set(CMAKE_C_STANDARD 11)
 if(NOT CMAKE_BUILD_TYPE)
@@ -22,7 +22,7 @@ add_custom_command(
   DEPENDS ${CMAKE_SOURCE_DIR}/gen/gen_kernels.py
   COMMENT "Generating NEON kernels")
 
-add_library(ahnum STATIC
+add_library(kitelib STATIC
   ${GEN_ASM}
   src/ctx.c
   src/ref_fft.c
@@ -33,7 +33,8 @@ add_library(ahnum STATIC
   src/md5.c
   src/prstproof.c
 )
-target_include_directories(ahnum PUBLIC include PRIVATE src)
+target_include_directories(kitelib PUBLIC include PRIVATE src)
+set_target_properties(kitelib PROPERTIES OUTPUT_NAME kite)
 
 add_executable(gmp_ref tools/gmp_ref.c)
 target_include_directories(gmp_ref PRIVATE ${GMP_INCLUDE})
@@ -41,7 +42,7 @@ target_link_libraries(gmp_ref ${GMP_LIB})
 
 add_executable(test_gmp tests/test_gmp.c)
 target_include_directories(test_gmp PRIVATE ${GMP_INCLUDE} src)
-target_link_libraries(test_gmp ahnum ${GMP_LIB})
+target_link_libraries(test_gmp kitelib ${GMP_LIB})
 
 enable_testing()
 add_test(NAME gmp_ref_backend COMMAND test_gmp ref)
@@ -52,29 +53,29 @@ add_test(NAME gmp_sme_backend COMMAND test_gmp sme 40)
 add_test(NAME gmp_sme_threads COMMAND test_gmp sme 30 3)
 
 add_executable(sweep_err tools/sweep_err.c)
-target_link_libraries(sweep_err ahnum)
+target_link_libraries(sweep_err kitelib)
 
-add_executable(ahbench tools/ahbench.c)
-target_link_libraries(ahbench ahnum)
+add_executable(kite tools/kite.c)
+target_link_libraries(kite kitelib)
 
-add_executable(ahprst tools/ahprst.c)
-target_include_directories(ahprst PRIVATE src)
-target_link_libraries(ahprst ahnum)
+add_executable(kite-prst tools/kite_prst.c)
+target_include_directories(kite-prst PRIVATE src)
+target_link_libraries(kite-prst kitelib)
 
 add_executable(test_stages tests/test_stages.c)
 target_include_directories(test_stages PRIVATE src)
-target_link_libraries(test_stages ahnum)
+target_link_libraries(test_stages kitelib)
 add_test(NAME asm_stages COMMAND test_stages)
-add_test(NAME known_residues COMMAND ${CMAKE_SOURCE_DIR}/tests/run_known.sh $<TARGET_FILE:ahbench> ${CMAKE_SOURCE_DIR}/tests/known_residues.csv 100000)
-add_test(NAME known_residues_threads COMMAND ${CMAKE_SOURCE_DIR}/tests/run_known.sh $<TARGET_FILE:ahbench> ${CMAKE_SOURCE_DIR}/tests/known_residues.csv 100000 --threads 2)
-add_test(NAME known_residues_long COMMAND ${CMAKE_SOURCE_DIR}/tests/run_known.sh $<TARGET_FILE:ahbench> ${CMAKE_SOURCE_DIR}/tests/known_residues.csv 1000000)
+add_test(NAME known_residues COMMAND ${CMAKE_SOURCE_DIR}/tests/run_known.sh $<TARGET_FILE:kite> ${CMAKE_SOURCE_DIR}/tests/known_residues.csv 100000)
+add_test(NAME known_residues_threads COMMAND ${CMAKE_SOURCE_DIR}/tests/run_known.sh $<TARGET_FILE:kite> ${CMAKE_SOURCE_DIR}/tests/known_residues.csv 100000 --threads 2)
+add_test(NAME known_residues_long COMMAND ${CMAKE_SOURCE_DIR}/tests/run_known.sh $<TARGET_FILE:kite> ${CMAKE_SOURCE_DIR}/tests/known_residues.csv 1000000)
 set_tests_properties(known_residues_long PROPERTIES LABELS long)
-add_test(NAME prst_compat COMMAND ${CMAKE_SOURCE_DIR}/tests/prst_compat.sh $<TARGET_FILE:ahprst>)
-add_test(NAME gerbicz_fault COMMAND $<TARGET_FILE:ahbench> prp 1203 90001 --fault 50000 --expect 4BE9F1953E350085)
+add_test(NAME prst_compat COMMAND ${CMAKE_SOURCE_DIR}/tests/prst_compat.sh $<TARGET_FILE:kite-prst>)
+add_test(NAME gerbicz_fault COMMAND $<TARGET_FILE:kite> prp 1203 90001 --fault 50000 --expect 4BE9F1953E350085)
 
 add_executable(kbench tools/kbench.c)
 target_include_directories(kbench PRIVATE src)
-target_link_libraries(kbench ahnum)
+target_link_libraries(kbench kitelib)
 
 add_executable(xcheck tools/xcheck.c)
-target_link_libraries(xcheck ahnum)
+target_link_libraries(xcheck kitelib)

@@ -25,7 +25,7 @@
 #define G 8
 #define NTAB_PAIR 96  // doubles of normaliser table per row pair
 
-// Phase profiler (AHN_PROF=1): accumulates counter ticks on thread 0 and
+// Phase profiler (KITE_PROF=1): accumulates counter ticks on thread 0 and
 // prints the split at exit. Off by default; the check is one load per phase.
 enum { PR_P1_INV, PR_P1_NORM, PR_P1_FWD, PR_P1_B, PR_P2_IN, PR_P2_FWD, PR_P2_SPLIT, PR_P2_INV,
        PR_P2_OUT, PR_P2_SPEC, PR_P1_LAST, PR_N };
@@ -52,7 +52,7 @@ static void prof_report(void) {
 }
 static inline int prof_enabled(void) {
     if (prof_on < 0) {
-        const char *e = getenv("AHN_PROF");
+        const char *e = getenv("KITE_PROF");
         prof_on = e && *e == '1';
         if (prof_on) atexit(prof_report);
     }
@@ -116,7 +116,7 @@ typedef struct {
     uint32_t (*pairs)[2];  // row pairs in processing order; pairs[0] is (k_r=0, R/2)
     uint32_t npairs;
     // threading
-    ahn_pool *pool;
+    kite_pool *pool;
     int nth;
     uint32_t gstart[65];   // thread t owns groups [gstart[t], gstart[t+1])
     double *scr[64];       // per-thread pass-2 scratch (C elements)
@@ -124,7 +124,7 @@ typedef struct {
     double maxerr_t[64];
     double wrapq;
     // current job
-    ahn_ctx *ctx;
+    kite_ctx *ctx;
     double *d;
     int mul;
 } neon_state;
@@ -146,18 +146,18 @@ static int factorize(uint32_t n, uint8_t *radix) {
 static void set_fns(stage *s) {
 #define CASE(P)                          \
     case P:                              \
-        s->tw_f[0] = ahn_dif_r##P;                \
-        s->notw_f[0] = ahn_dif_r##P##_notw;       \
-        s->dif_t4[0] = ahn_dif_r##P##_t4;         \
-        s->dit_t4[0] = ahn_dit_r##P##_t4;         \
-        s->dit_tw[0] = ahn_dit_r##P;              \
-        s->dit_notw[0] = ahn_dit_r##P##_notw;     \
-        s->tw_f[1] = ahn_dif_r##P##_b;            \
-        s->notw_f[1] = ahn_dif_r##P##_notw_b;     \
-        s->dif_t4[1] = ahn_dif_r##P##_t4_b;       \
-        s->dit_t4[1] = ahn_dit_r##P##_t4_b;       \
-        s->dit_tw[1] = ahn_dit_r##P##_b;          \
-        s->dit_notw[1] = ahn_dit_r##P##_notw_b;   \
+        s->tw_f[0] = kite_dif_r##P;                \
+        s->notw_f[0] = kite_dif_r##P##_notw;       \
+        s->dif_t4[0] = kite_dif_r##P##_t4;         \
+        s->dit_t4[0] = kite_dit_r##P##_t4;         \
+        s->dit_tw[0] = kite_dit_r##P;              \
+        s->dit_notw[0] = kite_dit_r##P##_notw;     \
+        s->tw_f[1] = kite_dif_r##P##_b;            \
+        s->notw_f[1] = kite_dif_r##P##_notw_b;     \
+        s->dif_t4[1] = kite_dif_r##P##_t4_b;       \
+        s->dit_t4[1] = kite_dit_r##P##_t4_b;       \
+        s->dit_tw[1] = kite_dit_r##P##_b;          \
+        s->dit_notw[1] = kite_dit_r##P##_notw_b;   \
         break;
     switch (s->p) {
         CASE(2)
@@ -172,7 +172,7 @@ static void set_fns(stage *s) {
 
 // ---- tangent-form DIT twiddles --------------------------------------------
 
-uint32_t ahn_tan_nscal(uint32_t p) {
+uint32_t kite_tan_nscal(uint32_t p) {
     switch (p) {
         case 2: return 2;
         case 3: case 4: return 6;
@@ -183,8 +183,8 @@ uint32_t ahn_tan_nscal(uint32_t p) {
 
 // See the tangent-form note in gen/gen_kernels.py: input t of the butterfly at
 // j is multiplied by conj(w) = c_t (1 + i tau_t), theta_t = 2 pi t j / (p s).
-int ahn_tan_table(uint32_t p, uint32_t s, double *out) {
-    uint32_t ns = ahn_tan_nscal(p), sz = p * s;
+int kite_tan_table(uint32_t p, uint32_t s, double *out) {
+    uint32_t ns = kite_tan_nscal(p), sz = p * s;
     if (!ns) return -1;
     for (uint32_t j = 0; j < s; j++) {
         double c[8] = {1}, tau[8] = {0};
@@ -226,7 +226,7 @@ int ahn_tan_table(uint32_t p, uint32_t s, double *out) {
 // first4: start with a radix-4 stage (the row FFT fuses it with the transpose).
 // asc: order the (remaining) radices ascending instead of 8, 4, 2, 7, 5, 3, which
 // puts the largest radix in the s = 1 stage; whichever is faster depends on the
-// length (`ahbench tune` records it).
+// length (`kite tune` records it).
 static int nplan_init(nplan *pl, uint32_t n, int first4, int asc) {
     uint8_t radix[32];
     int m;
@@ -260,7 +260,7 @@ static int nplan_init(nplan *pl, uint32_t n, int first4, int asc) {
         tot += (size_t)s * (radix[i] - 1) * 2;
         sz = s;
     }
-    pl->twmem = ahn_alloc((tot + 2) * sizeof(double));
+    pl->twmem = kite_alloc((tot + 2) * sizeof(double));
     pl->rev = malloc(n * sizeof(uint32_t));
     pl->pos = malloc(n * sizeof(uint32_t));
     double *tp = pl->twmem;
@@ -274,14 +274,14 @@ static int nplan_init(nplan *pl, uint32_t n, int first4, int asc) {
         set_fns(st);
         st->twt = NULL;
         st->dit_tan[0] = st->dit_tan[1] = NULL;
-        if (st->s > 1 && ahn_tan_nscal(st->p) && !getenv("AHN_NO_TAN")) {
-            st->twt = ahn_alloc((size_t)st->s * ahn_tan_nscal(st->p) * sizeof(double));
-            ahn_tan_table(st->p, st->s, st->twt);
+        if (st->s > 1 && kite_tan_nscal(st->p) && !getenv("KITE_NO_TAN")) {
+            st->twt = kite_alloc((size_t)st->s * kite_tan_nscal(st->p) * sizeof(double));
+            kite_tan_table(st->p, st->s, st->twt);
             switch (st->p) {
 #define TAN(P)                                \
     case P:                                   \
-        st->dit_tan[0] = ahn_dit_r##P##_tan;   \
-        st->dit_tan[1] = ahn_dit_r##P##_tan_b; \
+        st->dit_tan[0] = kite_dit_r##P##_tan;   \
+        st->dit_tan[1] = kite_dit_r##P##_tan_b; \
         break;
                 TAN(2)
                 TAN(3)
@@ -298,8 +298,8 @@ static int nplan_init(nplan *pl, uint32_t n, int first4, int asc) {
             }
         }
         if (st->p == 8) {
-            st->mdif = ahn_alloc((size_t)st->s * 128 * sizeof(double));
-            st->mdit = ahn_alloc((size_t)st->s * 128 * sizeof(double));
+            st->mdif = kite_alloc((size_t)st->s * 128 * sizeof(double));
+            st->mdit = kite_alloc((size_t)st->s * 128 * sizeof(double));
             for (uint32_t j = 0; j < st->s; j++) {
                 for (uint32_t u = 0; u < 8; u++) {
                     for (uint32_t t = 0; t < 8; t++) {
@@ -340,11 +340,11 @@ static int nplan_init(nplan *pl, uint32_t n, int first4, int asc) {
 
 static void nplan_free(nplan *pl) {
     for (uint32_t i = 0; i < pl->nst; i++) {
-        ahn_free_aligned(pl->st[i].twt);
-        ahn_free_aligned(pl->st[i].mdif);
-        ahn_free_aligned(pl->st[i].mdit);
+        kite_free_aligned(pl->st[i].twt);
+        kite_free_aligned(pl->st[i].mdif);
+        kite_free_aligned(pl->st[i].mdit);
     }
-    ahn_free_aligned(pl->twmem);
+    kite_free_aligned(pl->twmem);
     free(pl->rev);
     free(pl->pos);
 }
@@ -429,11 +429,11 @@ static inline dinfo digit_info(const neon_state *st, uint32_t g, uint32_t r, uin
     return d;
 }
 
-#define s_at ahn_s_at
-#define weight_at ahn_weight
+#define s_at kite_s_at
+#define weight_at kite_weight
 
-static int neon_init_impl(ahn_ctx *ctx, int sme);
-static int neon_init(ahn_ctx *ctx) { return neon_init_impl(ctx, 0); }
+static int neon_init_impl(kite_ctx *ctx, int sme);
+static int neon_init(kite_ctx *ctx) { return neon_init_impl(ctx, 0); }
 
 static int sme_available(void) {
     int v = 0;
@@ -442,12 +442,12 @@ static int sme_available(void) {
     return v;
 }
 
-static int sme_init(ahn_ctx *ctx) {
+static int sme_init(kite_ctx *ctx) {
     if (!sme_available()) return -1;
     return neon_init_impl(ctx, 1);
 }
 
-static int neon_init_impl(ahn_ctx *ctx, int sme) {
+static int neon_init_impl(kite_ctx *ctx, int sme) {
     if (ctx->L % 64) return -1;
     neon_state *st = calloc(1, sizeof *st);
     if (!st) return -1;
@@ -468,7 +468,7 @@ static int neon_init_impl(ahn_ctx *ctx, int sme) {
     ctx->num_doubles = R * st->rowstride / 8;
 
     // four-step twiddles w_H^{c*k_r} at row position p
-    st->t4 = ahn_alloc(ctx->num_doubles * sizeof(double));
+    st->t4 = kite_alloc(ctx->num_doubles * sizeof(double));
     for (uint32_t p = 0; p < R; p++) {
         uint32_t kr = st->pr.rev[p];
         for (uint32_t c = 0; c < C; c++) {
@@ -493,7 +493,7 @@ static int neon_init_impl(ahn_ctx *ctx, int sme) {
         st->IB[i] = 1.0 / st->B[i];
         st->IBs[i] = st->scale / st->B[i];
     }
-    st->nconsts = ahn_alloc(48 * sizeof(double));
+    st->nconsts = kite_alloc(48 * sizeof(double));
     for (int i = 0; i < 16; i++) {
         st->nconsts[i] = st->B[i];
         st->nconsts[16 + i] = st->IBs[i];
@@ -506,9 +506,9 @@ static int neon_init_impl(ahn_ctx *ctx, int sme) {
         memcpy(&st->nconsts[37], &k52, 8);
     }
     size_t nseg = (size_t)st->ngroups * R;
-    st->A = ahn_alloc(nseg * sizeof(double));
-    st->IA = ahn_alloc(nseg * sizeof(double));
-    st->mask = ahn_alloc(nseg * sizeof(uint64_t));
+    st->A = kite_alloc(nseg * sizeof(double));
+    st->IA = kite_alloc(nseg * sizeof(double));
+    st->mask = kite_alloc(nseg * sizeof(uint64_t));
     for (uint32_t g = 0; g < st->ngroups; g++) {
         for (uint32_t r = 0; r < R; r++) {
             uint64_t J = 2 * ((uint64_t)r * C + g * G);
@@ -532,8 +532,8 @@ static int neon_init_impl(ahn_ctx *ctx, int sme) {
 
     // table-driven normaliser for sizes where the extra traffic stays in cache:
     // per row pair and digit i, {osc[2], 1/base[2], base*w[2]} (see gen_norm_tab)
-    if (H <= (1u << 17) && !getenv("AHN_NO_NTAB")) {
-        st->ntab = ahn_alloc((size_t)st->ngroups * (R / 2) * NTAB_PAIR * sizeof(double));
+    if (H <= (1u << 17) && !getenv("KITE_NO_NTAB")) {
+        st->ntab = kite_alloc((size_t)st->ngroups * (R / 2) * NTAB_PAIR * sizeof(double));
         double *t = st->ntab;
         for (uint32_t g = 0; g < st->ngroups; g++) {
             for (uint32_t r = 0; r < R; r += 2) {
@@ -552,19 +552,19 @@ static int neon_init_impl(ahn_ctx *ctx, int sme) {
 
     // pass 2 tables
     st->partner = malloc(R * sizeof(uint32_t));
-    st->rs = ahn_alloc(2 * R * sizeof(double));
+    st->rs = kite_alloc(2 * R * sizeof(double));
     for (uint32_t p = 0; p < R; p++) {
         uint32_t kr = st->pr.rev[p];
         st->partner[p] = st->pr.pos[(R - kr) % R];
         st->rs[2 * p] = __cospi(2.0 * kr / H);
         st->rs[2 * p + 1] = -__sinpi(2.0 * kr / H);
     }
-    st->cs = ahn_alloc(2 * C * sizeof(double));
+    st->cs = kite_alloc(2 * C * sizeof(double));
     for (uint32_t q = 0; q < C; q++) {
         st->cs[2 * q] = __cospi(2.0 * st->pc.rev[q] / C);
         st->cs[2 * q + 1] = -__sinpi(2.0 * st->pc.rev[q] / C);
     }
-    st->yscr = ahn_alloc((size_t)H * 16 + 64);
+    st->yscr = kite_alloc((size_t)H * 16 + 64);
     st->pairs = malloc(R / 2 * sizeof *st->pairs);
     {
         uint32_t p0 = st->pr.pos[0], ph = st->pr.pos[R / 2], np = 0;
@@ -585,33 +585,33 @@ static int neon_init_impl(ahn_ctx *ctx, int sme) {
     st->nth = nth;
     for (int t = 0; t <= nth; t++) st->gstart[t] = (uint32_t)((uint64_t)st->ngroups * t / nth);
     for (int t = 0; t < nth; t++) {
-        st->scr[t] = ahn_alloc((size_t)C * 32);
-        st->carry[t] = ahn_alloc(R * sizeof(double));
+        st->scr[t] = kite_alloc((size_t)C * 32);
+        st->carry[t] = kite_alloc(R * sizeof(double));
     }
-    st->pool = nth > 1 ? ahn_pool_new(nth) : NULL;
+    st->pool = nth > 1 ? kite_pool_new(nth) : NULL;
     return 0;
 }
 
-static void neon_free(ahn_ctx *ctx) {
+static void neon_free(kite_ctx *ctx) {
     neon_state *st = ctx->bk;
     nplan_free(&st->pr);
     nplan_free(&st->pc);
-    ahn_free_aligned(st->t4);
-    ahn_free_aligned(st->A);
-    ahn_free_aligned(st->IA);
-    ahn_free_aligned(st->mask);
-    ahn_free_aligned(st->nconsts);
-    ahn_free_aligned(st->ntab);
+    kite_free_aligned(st->t4);
+    kite_free_aligned(st->A);
+    kite_free_aligned(st->IA);
+    kite_free_aligned(st->mask);
+    kite_free_aligned(st->nconsts);
+    kite_free_aligned(st->ntab);
     free(st->partner);
-    ahn_free_aligned(st->rs);
-    ahn_free_aligned(st->cs);
-    ahn_pool_free(st->pool);
+    kite_free_aligned(st->rs);
+    kite_free_aligned(st->cs);
+    kite_pool_free(st->pool);
     for (int t = 0; t < st->nth; t++) {
-        ahn_free_aligned(st->scr[t]);
-        ahn_free_aligned(st->carry[t]);
+        kite_free_aligned(st->scr[t]);
+        kite_free_aligned(st->carry[t]);
     }
     free(st->pairs);
-    ahn_free_aligned(st->yscr);
+    kite_free_aligned(st->yscr);
     free(st);
     ctx->bk = NULL;
 }
@@ -639,8 +639,8 @@ static void group_fwd(neon_state *st, double *d, uint32_t g) {
         const stage *s = &st->pr.st[i];
         size_t bs = (size_t)s->s * s->p * es;
         if (sme_stage(st, s)) {
-            ahn_sme_r8(base, es, s->nblocks, bs, s->s, s->mdif);
-            if (s->s == 1) ahn_cmul_b(base, es, st->R, delta);
+            kite_sme_r8(base, es, s->nblocks, bs, s->s, s->mdif);
+            if (s->s == 1) kite_cmul_b(base, es, st->R, delta);
         } else if (s->s == 1) {
             s->dif_t4[1](base, es, 4, s->nblocks, bs, delta);
         } else {
@@ -661,8 +661,8 @@ static void group_inv(neon_state *st, double *d, uint32_t g) {
         const stage *s = &st->pr.st[i];
         size_t bs = (size_t)s->s * s->p * es;
         if (sme_stage(st, s)) {
-            if (s->s == 1) ahn_cmulc_b(base, es, st->R, delta);
-            ahn_sme_r8(base, es, s->nblocks, bs, s->s, s->mdit);
+            if (s->s == 1) kite_cmulc_b(base, es, st->R, delta);
+            kite_sme_r8(base, es, s->nblocks, bs, s->s, s->mdit);
         } else if (s->s == 1) {
             s->dit_t4[1](base, es, 4, s->nblocks, bs, delta);
         } else if (s->dit_tan[1]) {
@@ -708,7 +708,7 @@ static void norm_rows_c(neon_state *st, double *d, double *carr, uint32_t g, uin
 }
 
 // Last two rows of the last group: normalise, fold the top, reweight.
-static void norm_last_rows(ahn_ctx *ctx, neon_state *st, double *d, double *carr,
+static void norm_last_rows(kite_ctx *ctx, neon_state *st, double *d, double *carr,
                            double *maxerr, double *wrapq) {
     uint32_t g = st->ngroups - 1, R = st->R;
     norm_rows_c(st, d, carr, g, R - 2, R - 1, 0, maxerr);
@@ -767,21 +767,21 @@ typedef double (*norm_fn)(double *, size_t, size_t, double *, const double *, co
                           const uint64_t *, const double *);
 
 // mode 0/1/2 = a/b/c (see gen_norm)
-static void norm_rows(ahn_ctx *ctx, neon_state *st, double *d, double *carr, uint32_t g,
+static void norm_rows(kite_ctx *ctx, neon_state *st, double *d, double *carr, uint32_t g,
                       uint32_t r0, uint32_t r1, int mode, double *maxerr) {
     static const norm_fn fns[3][2][2] = {
-        {{ahn_norm_a, ahn_norm_ae}, {ahn_norm_at, ahn_norm_ate}},
-        {{ahn_norm_b, ahn_norm_be}, {ahn_norm_bt, ahn_norm_bte}},
-        {{ahn_norm_c, ahn_norm_c}, {ahn_norm_ct, ahn_norm_ct}},
+        {{kite_norm_a, kite_norm_ae}, {kite_norm_at, kite_norm_ate}},
+        {{kite_norm_b, kite_norm_be}, {kite_norm_bt, kite_norm_bte}},
+        {{kite_norm_c, kite_norm_c}, {kite_norm_ct, kite_norm_ct}},
     };
     size_t idx = (size_t)g * st->R + r0;
     double *gb = (double *)((char *)d + g * 128 + r0 * st->rowstride);
     int err = ctx->op_count % ctx->err_every == 0;
     double e;
     static const norm_fn qfns[3][2] = {
-        {ahn_norm_aq, ahn_norm_aqe}, {ahn_norm_bq, ahn_norm_bqe}, {ahn_norm_cq, ahn_norm_cq}};
+        {kite_norm_aq, kite_norm_aqe}, {kite_norm_bq, kite_norm_bqe}, {kite_norm_cq, kite_norm_cq}};
     static const norm_fn ofns[3][2] = {
-        {ahn_norm_ao, ahn_norm_aoe}, {ahn_norm_bo, ahn_norm_boe}, {ahn_norm_co, ahn_norm_co}};
+        {kite_norm_ao, kite_norm_aoe}, {kite_norm_bo, kite_norm_boe}, {kite_norm_co, kite_norm_co}};
     if (st->ntab) {
         // four row pairs per call where possible (eight carry chains in flight)
         const double *t = st->ntab + ((size_t)g * (st->R / 2) + r0 / 2) * NTAB_PAIR;
@@ -812,7 +812,7 @@ static void norm_rows(ahn_ctx *ctx, neon_state *st, double *d, double *carr, uin
 // with carry-in 0 and kept as unweighted digits; the others are completed.
 static void pass1_a(void *arg, int t, int n) {
     neon_state *st = arg;
-    ahn_ctx *ctx = st->ctx;
+    kite_ctx *ctx = st->ctx;
     double *d = st->d, *carr = st->carry[t], maxerr = 0;
     uint32_t R = st->R, NG = st->ngroups, g0 = st->gstart[t], g1 = st->gstart[t + 1];
     (void)n;
@@ -865,12 +865,12 @@ static void pass1_b(void *arg, int t, int n) {
     if (cin != in) free(cin);
 }
 
-static void pass1(ahn_ctx *ctx, double *d) {
+static void pass1(kite_ctx *ctx, double *d) {
     neon_state *st = ctx->bk;
     st->ctx = ctx;
     st->d = d;
-    ahn_pool_run(st->pool, pass1_a, st);
-    ahn_pool_run(st->pool, pass1_b, st);
+    kite_pool_run(st->pool, pass1_a, st);
+    kite_pool_run(st->pool, pass1_b, st);
     for (int t = 0; t < st->nth; t++) {
         if (st->maxerr_t[t] > ctx->maxerr) ctx->maxerr = st->maxerr_t[t];
     }
@@ -998,7 +998,7 @@ static void pass2_job(void *arg, int t, int n) {
         double *rpp = (double *)((char *)d + pp * st->rowstride);
         // first stage fused with the transpose, then the rest of the row FFT
         const stage *s0 = &st->pc.st[0];
-        ahn_dif_r4_rows(rp, rpp, s, C, s0->tw);
+        kite_dif_r4_rows(rp, rpp, s, C, s0->tw);
         PROF_MARK(t, PR_P2_IN);
         for (uint32_t k = 1; k < st->pc.nst; k++) {
             const stage *sk = &st->pc.st[k];
@@ -1013,7 +1013,7 @@ static void pass2_job(void *arg, int t, int n) {
             PROF_MARK(t, PR_P2_SPEC);
         } else if (!y) {
             double rs[4] = {st->rs[2 * p], st->rs[2 * pp], st->rs[2 * p + 1], st->rs[2 * pp + 1]};
-            ahn_split_sq(s, C, rs, st->cs);
+            kite_split_sq(s, C, rs, st->cs);
         } else {
             split_pair_c(st, s, y, p, pp);
         }
@@ -1026,8 +1026,8 @@ static void pass2_job(void *arg, int t, int n) {
             else sk->dit_tw[0](s, 32, 1, sk->nblocks, bs, sk->s, sk->tw);
         }
         PROF_MARK(t, PR_P2_INV);
-        if (s0->twt) ahn_dit_r4_rows_tan(rp, rpp, s, C, s0->twt);
-        else ahn_dit_r4_rows(rp, rpp, s, C, s0->tw);
+        if (s0->twt) kite_dit_r4_rows_tan(rp, rpp, s, C, s0->twt);
+        else kite_dit_r4_rows(rp, rpp, s, C, s0->tw);
         PROF_MARK(t, PR_P2_OUT);
     }
 }
@@ -1040,28 +1040,28 @@ static void prep_job(void *arg, int t, int n) {
     for (uint32_t i = i0; i < i1; i++) {
         uint32_t p = st->pairs[i][0], pp = st->pairs[i][1];
         double *s = st->yscr + (size_t)i * 4 * C;
-        ahn_rows_in((double *)((char *)st->d + p * st->rowstride),
+        kite_rows_in((double *)((char *)st->d + p * st->rowstride),
                     (double *)((char *)st->d + pp * st->rowstride), s, C);
         plan_fwd(&st->pc, 0, s, 32, 1, 0, 0);
     }
 }
 
-static void pass2(ahn_ctx *ctx, double *d, int mul) {
+static void pass2(kite_ctx *ctx, double *d, int mul) {
     neon_state *st = ctx->bk;
     st->d = d;
     st->mul = mul;
-    ahn_pool_run(st->pool, pass2_job, st);
+    kite_pool_run(st->pool, pass2_job, st);
 }
 
-static void prep_operand(ahn_ctx *ctx, const double *d) {
+static void prep_operand(kite_ctx *ctx, const double *d) {
     neon_state *st = ctx->bk;
     st->d = (double *)d;
-    ahn_pool_run(st->pool, prep_job, st);
+    kite_pool_run(st->pool, prep_job, st);
 }
 
 // ---- ops ---------------------------------------------------------------------
 
-static void neon_from_digits(ahn_ctx *ctx, ahn_num *x, const int64_t *dig) {
+static void neon_from_digits(kite_ctx *ctx, kite_num *x, const int64_t *dig) {
     neon_state *st = ctx->bk;
     memset(x->d, 0, ctx->num_doubles * sizeof(double));
     for (uint32_t g = 0; g < st->ngroups; g++) {
@@ -1075,9 +1075,9 @@ static void neon_from_digits(ahn_ctx *ctx, ahn_num *x, const int64_t *dig) {
     }
 }
 
-static void neon_to_digits(ahn_ctx *ctx, const ahn_num *x, int64_t *dig) {
+static void neon_to_digits(kite_ctx *ctx, const kite_num *x, int64_t *dig) {
     neon_state *st = ctx->bk;
-    double *tmp = ahn_alloc(ctx->num_doubles * sizeof(double));
+    double *tmp = kite_alloc(ctx->num_doubles * sizeof(double));
     memcpy(tmp, x->d, ctx->num_doubles * sizeof(double));
     for (uint32_t g = 0; g < st->ngroups; g++) {
         group_inv(st, tmp, g);
@@ -1089,31 +1089,31 @@ static void neon_to_digits(ahn_ctx *ctx, const ahn_num *x, int64_t *dig) {
             }
         }
     }
-    ahn_free_aligned(tmp);
+    kite_free_aligned(tmp);
 }
 
-static void neon_square(ahn_ctx *ctx, ahn_num *x) {
+static void neon_square(kite_ctx *ctx, kite_num *x) {
     pass2(ctx, x->d, 0);
     pass1(ctx, x->d);
     ctx->op_count++;
 }
 
-static void neon_mul(ahn_ctx *ctx, ahn_num *x, const ahn_num *y) {
+static void neon_mul(kite_ctx *ctx, kite_num *x, const kite_num *y) {
     prep_operand(ctx, y->d);
     pass2(ctx, x->d, 1);
     pass1(ctx, x->d);
     ctx->op_count++;
 }
 
-static void neon_mul_small(ahn_ctx *ctx, ahn_num *x, int64_t m) {
+static void neon_mul_small(kite_ctx *ctx, kite_num *x, int64_t m) {
     int64_t *dig = ctx->tmpdig;
     neon_to_digits(ctx, x, dig);
     for (uint32_t j = 0; j < ctx->L; j++) dig[j] *= m;
-    ahn_carry_digits(ctx, dig);
+    kite_carry_digits(ctx, dig);
     neon_from_digits(ctx, x, dig);
 }
 
-const ahn_backend_ops ahn_neon_ops = {
+const kite_backend_ops kite_neon_ops = {
     .name = "neon",
     .init = neon_init,
     .free = neon_free,
@@ -1124,7 +1124,7 @@ const ahn_backend_ops ahn_neon_ops = {
     .mul_small = neon_mul_small,
 };
 
-const ahn_backend_ops ahn_sme_ops = {
+const kite_backend_ops kite_sme_ops = {
     .name = "sme",
     .init = sme_init,
     .free = neon_free,

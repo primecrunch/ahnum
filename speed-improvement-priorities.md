@@ -1,6 +1,6 @@
 # Speed improvement priorities
 
-Ranked candidates for making ahnum faster. Each item gets an upper-bound measurement first (a
+Ranked candidates for making kite faster. Each item gets an upper-bound measurement first (a
 deliberately wrong build that skips the work), and is dropped if the bound is under ~3% unless
 it is nearly free. Measure on a quiet machine (`tools/quiet.sh check`, which also waits for
 thermal pressure 0), under `caffeinate -i`. Short runs read ~12% above what this MacBook Pro
@@ -42,8 +42,8 @@ Below the bar on its own:
 
 ## Beyond the squaring
 
-- **PRST-compatible proof certificates: done** (`ahprst`, `docs/prst-compat.md`). Not a
-  speed-up; it lets ahnum take work that needs PRST certificates. Its speed against PRST on
+- **PRST-compatible proof certificates: done** (`kite-prst`, `docs/prst-compat.md`). Not a
+  speed-up; it lets kite take work that needs PRST certificates. Its speed against PRST on
   14 single-thread proof tests is still to measure.
 
 ## On hold

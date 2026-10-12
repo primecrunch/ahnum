@@ -1,7 +1,7 @@
 name: ci
 
 # Build and test on GitHub's Apple Silicon runners (M1, macOS 14 and 15): an older chip and
-# older macOS than the M4 / macOS 27 machines ahnum is developed on. Correctness only; the
+# older macOS than the M4 / macOS 27 machines kite is developed on. Correctness only; the
 # runners are virtualised, so timings mean nothing. The SME tests skip on M1 (no SME).
 on:
   push:

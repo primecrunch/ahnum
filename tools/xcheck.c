@@ -6,36 +6,36 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "ahnum.h"
+#include "kite.h"
 
-static ahn_backend parse_backend(const char *s) {
-    if (!strcmp(s, "ref")) return AHN_BACKEND_REF;
-    if (!strcmp(s, "c2p")) return AHN_BACKEND_C2P;
-    return AHN_BACKEND_NEON;
+static kite_backend parse_backend(const char *s) {
+    if (!strcmp(s, "ref")) return KITE_BACKEND_REF;
+    if (!strcmp(s, "c2p")) return KITE_BACKEND_C2P;
+    return KITE_BACKEND_NEON;
 }
 
-static uint64_t *run(uint64_t k, uint64_t n, uint64_t iters, uint32_t L, ahn_backend b,
+static uint64_t *run(uint64_t k, uint64_t n, uint64_t iters, uint32_t L, kite_backend b,
                      uint32_t th, size_t *nl, double *err) {
-    ahn_opts o = {b, L, th};
-    ahn_ctx *c = ahn_ctx_new(k, n, -1, &o);
+    kite_opts o = {b, L, th};
+    kite_ctx *c = kite_ctx_new(k, n, -1, &o);
     if (!c) {
         fprintf(stderr, "no context\n");
         exit(1);
     }
-    ahn_num *x = ahn_num_new(c), *y = ahn_num_new(c);
-    ahn_set_u64(c, x, 3);
-    ahn_set_u64(c, y, 7);
+    kite_num *x = kite_num_new(c), *y = kite_num_new(c);
+    kite_set_u64(c, x, 3);
+    kite_set_u64(c, y, 7);
     for (uint64_t i = 0; i < iters; i++) {
-        ahn_square(c, x);
-        if (i % 16 == 15) ahn_mul(c, x, y);  // exercise multiplication too
+        kite_square(c, x);
+        if (i % 16 == 15) kite_mul(c, x, y);  // exercise multiplication too
     }
-    *nl = ahn_limbs(c);
+    *nl = kite_limbs(c);
     uint64_t *l = malloc(*nl * 8);
-    ahn_get_limbs(c, x, l);
-    *err = ahn_max_roundoff(c);
-    ahn_num_free(c, x);
-    ahn_num_free(c, y);
-    ahn_ctx_free(c);
+    kite_get_limbs(c, x, l);
+    *err = kite_max_roundoff(c);
+    kite_num_free(c, x);
+    kite_num_free(c, y);
+    kite_ctx_free(c);
     return l;
 }
 

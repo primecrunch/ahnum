@@ -67,11 +67,11 @@ static void bench_sme(size_t R, size_t s) {
     double bs_sme = 1e30, bs_neon = 1e30;
     for (int r = 0; r < 5; r++) {
         double t0 = now();
-        for (int i = 0; i < reps; i++) ahn_sme_r8(d, es, nb, bs, s, m);
+        for (int i = 0; i < reps; i++) kite_sme_r8(d, es, nb, bs, s, m);
         double t = (now() - t0) / reps;
         if (t < bs_sme) bs_sme = t;
         t0 = now();
-        for (int i = 0; i < reps; i++) ahn_dif_r8_b(d, es, 4, nb, bs, s, tw);
+        for (int i = 0; i < reps; i++) kite_dif_r8_b(d, es, 4, nb, bs, s, tw);
         t = (now() - t0) / reps;
         if (t < bs_neon) bs_neon = t;
     }
@@ -91,15 +91,15 @@ static void bench_handoff(size_t R) {
     for (size_t i = 0; i < 128; i++) m[i] = 0.1;
     int reps = 4000;
     double t0 = now();
-    for (int i = 0; i < reps; i++) ahn_sme_r8(d, es, nb, bs, s, m);
+    for (int i = 0; i < reps; i++) kite_sme_r8(d, es, nb, bs, s, m);
     double t_sme = (now() - t0) / reps;
     t0 = now();
-    for (int i = 0; i < reps; i++) ahn_cmul_b(d, es, R, (ptrdiff_t)(R * es));
+    for (int i = 0; i < reps; i++) kite_cmul_b(d, es, R, (ptrdiff_t)(R * es));
     double t_neon = (now() - t0) / reps;
     t0 = now();
     for (int i = 0; i < reps; i++) {
-        ahn_sme_r8(d, es, nb, bs, s, m);
-        ahn_cmul_b(d, es, R, (ptrdiff_t)(R * es));
+        kite_sme_r8(d, es, nb, bs, s, m);
+        kite_cmul_b(d, es, R, (ptrdiff_t)(R * es));
     }
     double t_both = (now() - t0) / reps;
     printf("R=%-5zu (%4zu KB) SME %.0f ns  NEON pass %.0f ns  alternating %.0f ns (sum %.0f)\n", R,
@@ -123,17 +123,17 @@ int main(int argc, char **argv) {
     }
     if (argc > 1) ghz = atof(argv[1]);
     // FP instruction counts per butterfly (2 lanes): DFT + twiddles
-    bench_stage("dif_r8", ahn_dif_r8, NULL, 8, 1, 8, 56 + 28);
-    bench_stage("dif_r8", ahn_dif_r8, NULL, 8, 4, 8, 56 + 28);
-    bench_stage("dif_r8_notw", ahn_dif_r8_notw, NULL, 8, 1, 1, 56);
-    bench_stage("dif_r8_t4", NULL, ahn_dif_r8_t4, 8, 4, 1, 56 + 32);
-    bench_stage("dit_r8", ahn_dit_r8, NULL, 8, 1, 8, 56 + 28);
-    bench_stage("dif_r4", ahn_dif_r4, NULL, 4, 1, 8, 16 + 12);
-    bench_stage("dif_r4_notw", ahn_dif_r4_notw, NULL, 4, 1, 1, 16);
-    bench_stage("dif_r7_notw", ahn_dif_r7_notw, NULL, 7, 1, 1, 72);
-    bench_stage("dif_r7", ahn_dif_r7, NULL, 7, 1, 8, 72 + 24);
-    bench_stage("dif_r5_notw", ahn_dif_r5_notw, NULL, 5, 1, 1, 40);
-    bench_stage("dif_r3_notw", ahn_dif_r3_notw, NULL, 3, 1, 1, 20);
-    bench_stage("dif_r2", ahn_dif_r2, NULL, 2, 1, 8, 4 + 4);
+    bench_stage("dif_r8", kite_dif_r8, NULL, 8, 1, 8, 56 + 28);
+    bench_stage("dif_r8", kite_dif_r8, NULL, 8, 4, 8, 56 + 28);
+    bench_stage("dif_r8_notw", kite_dif_r8_notw, NULL, 8, 1, 1, 56);
+    bench_stage("dif_r8_t4", NULL, kite_dif_r8_t4, 8, 4, 1, 56 + 32);
+    bench_stage("dit_r8", kite_dit_r8, NULL, 8, 1, 8, 56 + 28);
+    bench_stage("dif_r4", kite_dif_r4, NULL, 4, 1, 8, 16 + 12);
+    bench_stage("dif_r4_notw", kite_dif_r4_notw, NULL, 4, 1, 1, 16);
+    bench_stage("dif_r7_notw", kite_dif_r7_notw, NULL, 7, 1, 1, 72);
+    bench_stage("dif_r7", kite_dif_r7, NULL, 7, 1, 8, 72 + 24);
+    bench_stage("dif_r5_notw", kite_dif_r5_notw, NULL, 5, 1, 1, 40);
+    bench_stage("dif_r3_notw", kite_dif_r3_notw, NULL, 3, 1, 1, 20);
+    bench_stage("dif_r2", kite_dif_r2, NULL, 2, 1, 8, 4 + 4);
     return 0;
 }

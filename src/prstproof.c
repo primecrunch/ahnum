@@ -40,12 +40,12 @@ uint32_t pp_fingerprint(uint64_t k, uint64_t n) {
 }
 
 uint32_t pp_unique_fingerprint(uint32_t fp, const char *id) {  // file.cpp:182
-    ahn_md5 m;
+    kite_md5 m;
     uint8_t d[16];
-    ahn_md5_init(&m);
-    ahn_md5_update(&m, &fp, 4);
-    ahn_md5_update(&m, id, strlen(id));
-    ahn_md5_final(&m, d);
+    kite_md5_init(&m);
+    kite_md5_update(&m, &fp, 4);
+    kite_md5_update(&m, id, strlen(id));
+    kite_md5_final(&m, d);
     return d[0] | d[1] << 8 | d[2] << 16 | (uint32_t)d[3] << 24;
 }
 
@@ -100,7 +100,7 @@ int pp_write(const char *path, int type, uint32_t fingerprint, int32_t iteration
         if (g[i].len) put(&b, g[i].w, 4 * (size_t)g[i].len);
     }
     char hex[33], mpath[4096];
-    ahn_md5_hex(b.p, b.len, hex);
+    kite_md5_hex(b.p, b.len, hex);
     snprintf(mpath, sizeof mpath, "%s.md5", path);
     int rc = write_all(path, b.p, b.len) || write_all(mpath, hex, 32) ? -1 : 0;
     free(b.p);
@@ -133,7 +133,7 @@ int pp_read(const char *path, int type, uint32_t fingerprint, int32_t *iteration
     uint8_t *m = read_file(mpath, &mlen);
     if (m) {  // file.cpp:236: a sidecar that is present must match
         char hex[33];
-        ahn_md5_hex(p, len, hex);
+        kite_md5_hex(p, len, hex);
         int bad = mlen < 32 || memcmp(hex, m, 32) != 0;
         free(m);
         if (bad) {
@@ -206,10 +206,10 @@ int pp_points(uint32_t iterations, int count, uint32_t *pos) {  // proof.cpp:160
 
 // ---- numbers ------------------------------------------------------------------
 
-void pp_from_num(ahn_ctx *ctx, const ahn_num *x, pp_giant *g) {
-    size_t nl = ahn_limbs(ctx);
+void pp_from_num(kite_ctx *ctx, const kite_num *x, pp_giant *g) {
+    size_t nl = kite_limbs(ctx);
     uint64_t *l = malloc(nl * 8);
-    ahn_get_limbs(ctx, x, l);
+    kite_get_limbs(ctx, x, l);
     g->w = malloc(nl * 8);
     for (size_t i = 0; i < nl; i++) {
         g->w[2 * i] = (uint32_t)l[i];
@@ -220,12 +220,12 @@ void pp_from_num(ahn_ctx *ctx, const ahn_num *x, pp_giant *g) {
     free(l);
 }
 
-void pp_to_num(ahn_ctx *ctx, const pp_giant *g, ahn_num *x) {
-    size_t nl = ahn_limbs(ctx);
+void pp_to_num(kite_ctx *ctx, const pp_giant *g, kite_num *x) {
+    size_t nl = kite_limbs(ctx);
     uint64_t *l = calloc(nl, 8);
     for (int32_t i = 0; i < g->len && (size_t)i < 2 * nl; i++)
         l[i / 2] |= (uint64_t)g->w[i] << (32 * (i & 1));
-    ahn_set_limbs(ctx, x, l);
+    kite_set_limbs(ctx, x, l);
     free(l);
 }
 
@@ -245,13 +245,13 @@ static int giants_equal(const pp_giant *a, const pp_giant *b) {
 // MD5(fp || Y || D), first 64 bits, made odd and free of prime factors below 1000
 // (proof.cpp:511 hash_giants, :522 make_prime). The digest is read as a 2-word giant.
 static unsigned __int128 challenge(uint32_t fp, const pp_giant *Y, const pp_giant *D) {
-    ahn_md5 m;
+    kite_md5 m;
     uint8_t d[16];
-    ahn_md5_init(&m);
-    ahn_md5_update(&m, &fp, 4);
-    if (Y->len) ahn_md5_update(&m, Y->w, 4 * (size_t)Y->len);
-    if (D->len) ahn_md5_update(&m, D->w, 4 * (size_t)D->len);
-    ahn_md5_final(&m, d);
+    kite_md5_init(&m);
+    kite_md5_update(&m, &fp, 4);
+    if (Y->len) kite_md5_update(&m, Y->w, 4 * (size_t)Y->len);
+    if (D->len) kite_md5_update(&m, D->w, 4 * (size_t)D->len);
+    kite_md5_final(&m, d);
     uint32_t w0 = d[0] | d[1] << 8 | d[2] << 16 | (uint32_t)d[3] << 24;
     uint32_t w1 = d[4] | d[5] << 8 | d[6] << 16 | (uint32_t)d[7] << 24;
     w0 |= 1;
@@ -277,17 +277,17 @@ static unsigned __int128 challenge(uint32_t fp, const pp_giant *Y, const pp_gian
 }
 
 // X = X0^e (proof.cpp:538 exp_gw); X and X0 must differ.
-static void power(ahn_ctx *ctx, unsigned __int128 e, ahn_num *X, const ahn_num *X0) {
+static void power(kite_ctx *ctx, unsigned __int128 e, kite_num *X, const kite_num *X0) {
     int len = 0;
     while (len < 128 && (e >> len) > 1) len++;
-    ahn_copy(ctx, X, X0);
+    kite_copy(ctx, X, X0);
     for (int bit = len - 1; bit >= 0; bit--) {
-        ahn_square(ctx, X);
-        if ((e >> bit) & 1) ahn_mul(ctx, X, X0);
+        kite_square(ctx, X);
+        if ((e >> bit) & 1) kite_mul(ctx, X, X0);
     }
 }
 
-static int roundoff_ok(ahn_ctx *ctx) { return ahn_max_roundoff(ctx) < 0.40; }
+static int roundoff_ok(kite_ctx *ctx) { return kite_max_roundoff(ctx) < 0.40; }
 
 static int read_value(const char *prefix, const char *kind, int index, int type, uint32_t fp,
                       int32_t expect_iter, pp_giant *g) {
@@ -314,18 +314,18 @@ static int depth_of(int count) {
 
 // ---- save: compress the points into products (ProofSave::execute, proof.cpp:549) -----
 
-int pp_save_products(ahn_ctx *ctx, uint64_t k, uint64_t n, uint32_t a, int count,
+int pp_save_products(kite_ctx *ctx, uint64_t k, uint64_t n, uint32_t a, int count,
                      const char *prefix, int keep, uint64_t *raw_res64) {
     uint32_t fpN = pp_fingerprint(k, n), fpP = pp_proof_fingerprint(k, n, a);
     int t = depth_of(count), rc = -1;
     uint32_t *pos = malloc((count + 1) * sizeof *pos);
     pp_points((uint32_t)n, count, pos);
-    ahn_num *Y = ahn_num_new(ctx), *D = ahn_num_new(ctx), *T = ahn_num_new(ctx);
-    ahn_num **tree = calloc(t, sizeof *tree);
+    kite_num *Y = kite_num_new(ctx), *D = kite_num_new(ctx), *T = kite_num_new(ctx);
+    kite_num **tree = calloc(t, sizeof *tree);
     unsigned __int128 *h = calloc(t, sizeof *h);
     pp_giant g = {0}, yg = {0}, dg = {0};
-    for (int i = 0; i < t; i++) tree[i] = ahn_num_new(ctx);
-    ahn_reset_roundoff(ctx);
+    for (int i = 0; i < t; i++) tree[i] = kite_num_new(ctx);
+    kite_reset_roundoff(ctx);
 
     if (read_value(prefix, "proof", count, PP_TYPE_VALUE, fpP, (int32_t)pos[count], &g)) goto out;
     pp_to_num(ctx, &g, Y);
@@ -345,11 +345,11 @@ int pp_save_products(ahn_ctx *ctx, uint64_t k, uint64_t n, uint32_t a, int count
                 pp_giant_free(&g);
                 for (int kk = 1; kk <= i; kk++) {
                     if ((j & (1 << (kk - 1))) == 0) {
-                        ahn_copy(ctx, tree[i - kk], D);
+                        kite_copy(ctx, tree[i - kk], D);
                         break;
                     }
                     power(ctx, h[i - kk], T, tree[i - kk]);
-                    ahn_mul(ctx, D, T);
+                    kite_mul(ctx, D, T);
                 }
             }
         }
@@ -366,7 +366,7 @@ int pp_save_products(ahn_ctx *ctx, uint64_t k, uint64_t n, uint32_t a, int count
         pp_giant_free(&yg);
         pp_giant_free(&dg);
         power(ctx, h[i], T, D);  // D^h
-        ahn_mul(ctx, Y, T);
+        kite_mul(ctx, Y, T);
         if (!roundoff_ok(ctx)) {
             fprintf(stderr, "round-off error while compressing proof points.\n");
             goto out;
@@ -384,13 +384,13 @@ int pp_save_products(ahn_ctx *ctx, uint64_t k, uint64_t n, uint32_t a, int count
     }
     rc = 0;
 out:
-    for (int i = 0; i < t; i++) ahn_num_free(ctx, tree[i]);
+    for (int i = 0; i < t; i++) kite_num_free(ctx, tree[i]);
     free(tree);
     free(h);
     free(pos);
-    ahn_num_free(ctx, Y);
-    ahn_num_free(ctx, D);
-    ahn_num_free(ctx, T);
+    kite_num_free(ctx, Y);
+    kite_num_free(ctx, D);
+    kite_num_free(ctx, T);
     return rc;
 }
 
@@ -411,9 +411,9 @@ static uint64_t nm1_mod(uint64_t k, uint64_t n, uint64_t m) {
 // For a composite result: R = a^(N-1) must not be a root of unity of the small order PRST
 // tests. PRST (security 24) factors N-1 over 2 and the odd primes below 2^12, each as the
 // largest power below 2^31, and fails if R^(product) == 1. Returns 0 if the check passes.
-static int roots_of_unity_check(ahn_ctx *ctx, uint64_t k, uint64_t n, uint32_t a,
+static int roots_of_unity_check(kite_ctx *ctx, uint64_t k, uint64_t n, uint32_t a,
                                 const pp_giant *xn) {
-    size_t nl = ahn_limbs(ctx);
+    size_t nl = kite_limbs(ctx);
     uint64_t *l = calloc(nl, 8), *N = calloc(nl, 8);
     for (int32_t i = 0; i < xn->len && (size_t)i < 2 * nl; i++)
         l[i / 2] |= (uint64_t)xn->w[i] << (32 * (i & 1));
@@ -422,15 +422,15 @@ static int roots_of_unity_check(ahn_ctx *ctx, uint64_t k, uint64_t n, uint32_t a
     for (size_t j = 0; j < nl; j++)
         if (N[j]--) break;
     int rc = 0;
-    if (ahn_residue_nm1(l, N, nl, a) == 0) {
+    if (kite_residue_nm1(l, N, nl, a) == 0) {
         int one = l[0] == 1;
         for (size_t j = 1; j < nl; j++) one &= l[j] == 0;
         if (!one) {  // a PRP result is not checked
-            ahn_num *R = ahn_num_new(ctx), *X = ahn_num_new(ctx), *T = ahn_num_new(ctx);
-            ahn_set_limbs(ctx, R, l);
-            ahn_copy(ctx, X, R);
+            kite_num *R = kite_num_new(ctx), *X = kite_num_new(ctx), *T = kite_num_new(ctx);
+            kite_set_limbs(ctx, R, l);
+            kite_copy(ctx, X, R);
             // the power of 2 in N-1 = 2(k*2^(n-1) - 1) is 2^1
-            ahn_square(ctx, X);
+            kite_square(ctx, X);
             for (uint32_t p = 3; p < 4096; p += 2) {
                 int prime = 1;
                 for (uint32_t q = 3; q * q <= p; q += 2)
@@ -441,21 +441,21 @@ static int roots_of_unity_check(ahn_ctx *ctx, uint64_t k, uint64_t n, uint32_t a
                 if (!prime || nm1_mod(k, n, p) != 0) continue;
                 uint64_t d = p;  // largest p^e dividing N-1 with p^e < 2^31
                 while (d * p < 2147483647u && nm1_mod(k, n, d * p) == 0) d *= p;
-                ahn_copy(ctx, T, X);  // X = X^d
+                kite_copy(ctx, T, X);  // X = X^d
                 int len = 0;
                 while ((d >> len) > 1) len++;
                 for (int b = len - 1; b >= 0; b--) {
-                    ahn_square(ctx, X);
-                    if ((d >> b) & 1) ahn_mul(ctx, X, T);
+                    kite_square(ctx, X);
+                    if ((d >> b) & 1) kite_mul(ctx, X, T);
                 }
             }
-            ahn_get_limbs(ctx, X, l);
+            kite_get_limbs(ctx, X, l);
             one = l[0] == 1;
             for (size_t j = 1; j < nl; j++) one &= l[j] == 0;
             if (one) rc = -1;
-            ahn_num_free(ctx, R);
-            ahn_num_free(ctx, X);
-            ahn_num_free(ctx, T);
+            kite_num_free(ctx, R);
+            kite_num_free(ctx, X);
+            kite_num_free(ctx, T);
         }
     }
     free(l);
@@ -465,26 +465,26 @@ static int roots_of_unity_check(ahn_ctx *ctx, uint64_t k, uint64_t n, uint32_t a
 
 // ---- build: the certificate (ProofBuild::execute, proof.cpp:660, not Li, no security) ---
 
-int pp_build_cert(ahn_ctx *ctx, uint64_t k, uint64_t n, uint32_t a, int count,
+int pp_build_cert(kite_ctx *ctx, uint64_t k, uint64_t n, uint32_t a, int count,
                   const char *prefix, int keep, uint64_t *cert_res64) {
     uint32_t fpN = pp_fingerprint(k, n), fpP = pp_proof_fingerprint(k, n, a);
     int t = depth_of(count), rc = -1;
     uint32_t *pos = malloc((count + 1) * sizeof *pos);
     pp_points((uint32_t)n, count, pos);
-    ahn_num *X = ahn_num_new(ctx), *Y = ahn_num_new(ctx), *D = ahn_num_new(ctx),
-            *T = ahn_num_new(ctx);
+    kite_num *X = kite_num_new(ctx), *Y = kite_num_new(ctx), *D = kite_num_new(ctx),
+            *T = kite_num_new(ctx);
     pp_giant g = {0}, yg = {0}, dg = {0};
-    ahn_reset_roundoff(ctx);
+    kite_reset_roundoff(ctx);
 
     // point 0 must be a^k (proof.cpp:219)
     if (read_value(prefix, "proof", 0, PP_TYPE_VALUE, fpP, 0, &g)) goto out;
     pp_to_num(ctx, &g, X);
     {
-        ahn_set_u64(ctx, T, a);
-        ahn_set_u64(ctx, D, 1);
+        kite_set_u64(ctx, T, a);
+        kite_set_u64(ctx, D, 1);
         for (int b = 63; b >= 0; b--) {
-            ahn_square(ctx, D);
-            if ((k >> b) & 1) ahn_mul(ctx, D, T);
+            kite_square(ctx, D);
+            if ((k >> b) & 1) kite_mul(ctx, D, T);
         }
         pp_from_num(ctx, D, &dg);
         int ok = giants_equal(&g, &dg);
@@ -514,10 +514,10 @@ int pp_build_cert(ahn_ctx *ctx, uint64_t k, uint64_t n, uint32_t a, int count,
         pp_giant_free(&dg);
         unsigned __int128 e = h * (M % 2 ? 2 : 1);  // exp *= b for odd M (b = 2)
         power(ctx, e, T, X);
-        ahn_copy(ctx, X, T);
-        ahn_mul(ctx, X, D);
+        kite_copy(ctx, X, T);
+        kite_mul(ctx, X, D);
         power(ctx, h, T, D);
-        ahn_mul(ctx, Y, T);
+        kite_mul(ctx, Y, T);
         if (!roundoff_ok(ctx)) {
             fprintf(stderr, "round-off error while building the certificate.\n");
             goto out;
@@ -556,16 +556,16 @@ int pp_build_cert(ahn_ctx *ctx, uint64_t k, uint64_t n, uint32_t a, int count,
     rc = 0;
 out:
     free(pos);
-    ahn_num_free(ctx, X);
-    ahn_num_free(ctx, Y);
-    ahn_num_free(ctx, D);
-    ahn_num_free(ctx, T);
+    kite_num_free(ctx, X);
+    kite_num_free(ctx, Y);
+    kite_num_free(ctx, D);
+    kite_num_free(ctx, T);
     return rc;
 }
 
 // ---- verify: X^(2^M) with a Gerbicz check -----------------------------------------------
 
-int pp_verify_cert(ahn_ctx *ctx, uint64_t k, uint64_t n, const char *path, uint64_t *cert_res64,
+int pp_verify_cert(kite_ctx *ctx, uint64_t k, uint64_t n, const char *path, uint64_t *cert_res64,
                    uint32_t *Mout) {
     pp_giant c[3];
     int32_t M;
@@ -581,27 +581,27 @@ int pp_verify_cert(ahn_ctx *ctx, uint64_t k, uint64_t n, const char *path, uint6
         fprintf(stderr, "Gerbicz-Li certificates are not supported.\n");
         return -1;
     }
-    ahn_num *x0 = ahn_num_new(ctx), *x = ahn_num_new(ctx), *d = ahn_num_new(ctx),
-            *e = ahn_num_new(ctx);
+    kite_num *x0 = kite_num_new(ctx), *x = kite_num_new(ctx), *d = kite_num_new(ctx),
+            *e = kite_num_new(ctx);
     pp_to_num(ctx, &c[0], x0);
     pp_giant_free(&c[0]);
     uint32_t B = (uint32_t)sqrt((double)M);
     if (B < 1) B = 1;
     int rc = -1;
     for (int attempt = 0; attempt < 3 && rc; attempt++) {
-        ahn_reset_roundoff(ctx);
+        kite_reset_roundoff(ctx);
         // d_t = prod_{j<=t} x_{jB}; check d_T == d_{T-1}^(2^B) * x_0 once at the end
-        ahn_copy(ctx, x, x0);
-        ahn_copy(ctx, d, x0);
+        kite_copy(ctx, x, x0);
+        kite_copy(ctx, d, x0);
         uint32_t blocks = (uint32_t)M / B;
         for (uint32_t b = 0; b < blocks; b++) {
-            if (b + 1 == blocks) ahn_copy(ctx, e, d);  // d_{T-1}
-            ahn_square_n(ctx, x, B);
-            ahn_mul(ctx, d, x);
+            if (b + 1 == blocks) kite_copy(ctx, e, d);  // d_{T-1}
+            kite_square_n(ctx, x, B);
+            kite_mul(ctx, d, x);
         }
         if (blocks) {
-            ahn_square_n(ctx, e, B);
-            ahn_mul(ctx, e, x0);
+            kite_square_n(ctx, e, B);
+            kite_mul(ctx, e, x0);
             pp_giant g1, g2;
             pp_from_num(ctx, d, &g1);
             pp_from_num(ctx, e, &g2);
@@ -611,9 +611,9 @@ int pp_verify_cert(ahn_ctx *ctx, uint64_t k, uint64_t n, const char *path, uint6
             if (!ok) continue;
         }
         uint32_t tail = (uint32_t)M - blocks * B;
-        ahn_copy(ctx, e, x);
-        ahn_square_n(ctx, x, tail);
-        ahn_square_n(ctx, e, tail);
+        kite_copy(ctx, e, x);
+        kite_square_n(ctx, x, tail);
+        kite_square_n(ctx, e, tail);
         pp_giant g1, g2;
         pp_from_num(ctx, x, &g1);
         pp_from_num(ctx, e, &g2);
@@ -626,9 +626,9 @@ int pp_verify_cert(ahn_ctx *ctx, uint64_t k, uint64_t n, const char *path, uint6
         pp_giant_free(&g2);
     }
     if (Mout) *Mout = (uint32_t)M;
-    ahn_num_free(ctx, x0);
-    ahn_num_free(ctx, x);
-    ahn_num_free(ctx, d);
-    ahn_num_free(ctx, e);
+    kite_num_free(ctx, x0);
+    kite_num_free(ctx, x);
+    kite_num_free(ctx, d);
+    kite_num_free(ctx, e);
     return rc;
 }

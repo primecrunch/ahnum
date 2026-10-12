@@ -1,6 +1,6 @@
 // Prototype: Gerbicz-checked Fermat PRP test of N = k * 2^n - 1 on the GPU,
 // B copies at once (every slot runs the same number; the point is throughput
-// and an end-to-end check against known residues). Mirrors ahn_prp (src/prp.c):
+// and an end-to-end check against known residues). Mirrors kite_prp (src/prp.c):
 //   x_0 = 3^k, x_{i+1} = x_i^2, x_n = 3^(N+1); residue = x_n / 9 = 3^(N-1).
 //   Gerbicz, block size L: d_t = prod x_(jL), d_(t+1) = x_0 * d_t^(2^L); d is
 //   updated every L squarings and the identity is verified every M blocks; a
@@ -12,7 +12,7 @@
 // NTT), so there is no round-off check; Gerbicz covers hardware faults and
 // bugs.
 //
-// build: clang -O2 -fobjc-arc -Iinclude -Isrc gpu/gpu_prp.m build/libahnum.a \
+// build: clang -O2 -fobjc-arc -Iinclude -Isrc gpu/gpu_prp.m build/libkite.a \
 //            -framework Metal -framework Foundation -o build/gpu_prp
 // usage: build/gpu_prp K N [B] [--expect HEX] [--ckpt FILE] [--ckpt-secs S]
 //                      [--fault ITER] [--block L]   (run from the repo root)
@@ -20,7 +20,7 @@
 
 #include <math.h>
 
-#include "ahnum.h"
+#include "kite.h"
 #include "internal.h"
 
 static double now_s(void) { return [[NSDate date] timeIntervalSince1970]; }
@@ -90,18 +90,18 @@ int main(int argc, char **argv) {
                (unsigned long long)k, (unsigned long long)n, g.NP, B, L, M);
 
         // x_0 = 3^k mod N on the CPU, then Montgomery form
-        ahn_ctx *ctx = ahn_ctx_new(k, n, -1, NULL);
-        size_t nl = ahn_limbs(ctx), nl2 = nl + 2;
+        kite_ctx *ctx = kite_ctx_new(k, n, -1, NULL);
+        size_t nl = kite_limbs(ctx), nl2 = nl + 2;
         uint64_t *Nl = calloc(nl2, 8), *la = calloc(nl2, 8), *lb = calloc(nl2, 8);
         g_make_n(Nl, nl2, k, n);
-        ahn_num *cx = ahn_num_new(ctx);
-        ahn_set_u64(ctx, cx, 1);
+        kite_num *cx = kite_num_new(ctx);
+        kite_set_u64(ctx, cx, 1);
         for (int b = 63; b >= 0; b--) {
-            ahn_square(ctx, cx);
-            if ((k >> b) & 1) ahn_mul_small(ctx, cx, 3);
+            kite_square(ctx, cx);
+            if ((k >> b) & 1) kite_mul_small(ctx, cx, 3);
         }
         memset(la, 0, nl2 * 8);
-        ahn_get_limbs(ctx, cx, la);
+        kite_get_limbs(ctx, cx, la);
         g_to_mont(la, nl2, k, n, Nl);
         id<MTLBuffer> bX = gctx_numbuf(&g), bD = gctx_numbuf(&g), bT = gctx_numbuf(&g),
                       bX0 = gctx_numbuf(&g);
@@ -218,13 +218,13 @@ int main(int argc, char **argv) {
             memset(la, 0, nl2 * 8);
             g_words_to_limbs(X + (size_t)t * g.W, g.W, la, nl2);
             g_reduce_mod_n(la, nl2, k, n, Nl);
-            ahn_set_limbs(ctx, cx, la);
-            ahn_mul_small(ctx, cx, (int64_t)k);
+            kite_set_limbs(ctx, cx, la);
+            kite_mul_small(ctx, cx, (int64_t)k);
             memset(la, 0, nl2 * 8);
-            ahn_get_limbs(ctx, cx, la);
+            kite_get_limbs(ctx, cx, la);
             int prp = la[0] == 9;
             for (size_t j = 1; j < nl; j++) prp &= la[j] == 0;
-            if (ahn_residue_nm1(la, Nl, nl, 3)) return 4;
+            if (kite_residue_nm1(la, Nl, nl, 3)) return 4;
             if (t == 0) {
                 res0 = la[0];
                 is_prp = prp;

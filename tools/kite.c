@@ -1,10 +1,10 @@
-// ahbench: Fermat PRP tests, timing and tuning for Riesel numbers k*2^n-1.
+// kite: Fermat PRP tests, timing and tuning for Riesel numbers k*2^n-1.
 //
-//   ahbench prp  K N | "K*2^N-1"  [--expect HEX] [--base B] [--ckpt FILE]
+//   kite prp  K N | "K*2^N-1"  [--expect HEX] [--base B] [--ckpt FILE]
 //                                 [--ckpt-secs S] [--block B] [--fault ITER]
-//   ahbench time K N [--iters N]
-//   ahbench throughput K N [--configs 10x1,5x2,...] [--secs S]
-//   ahbench tune LMIN LMAX [--out FILE]
+//   kite time K N [--iters N]
+//   kite throughput K N [--configs 10x1,5x2,...] [--secs S]
+//   kite tune LMIN LMAX [--out FILE]
 // Common options: --backend ref|c2p|neon  --fft L  --threads T
 //
 // `prp` runs the library driver (Gerbicz-checked) and prints RES64, the low 64
@@ -18,7 +18,7 @@
 #include <string.h>
 #include <time.h>
 
-#include "ahnum.h"
+#include "kite.h"
 
 static double now(void) {
     struct timespec ts;
@@ -26,12 +26,12 @@ static double now(void) {
     return ts.tv_sec + ts.tv_nsec * 1e-9;
 }
 
-static ahn_backend parse_backend(const char *s) {
-    if (!strcmp(s, "ref")) return AHN_BACKEND_REF;
-    if (!strcmp(s, "c2p")) return AHN_BACKEND_C2P;
-    if (!strcmp(s, "neon")) return AHN_BACKEND_NEON;
-    if (!strcmp(s, "sme")) return AHN_BACKEND_SME;
-    return AHN_BACKEND_AUTO;
+static kite_backend parse_backend(const char *s) {
+    if (!strcmp(s, "ref")) return KITE_BACKEND_REF;
+    if (!strcmp(s, "c2p")) return KITE_BACKEND_C2P;
+    if (!strcmp(s, "neon")) return KITE_BACKEND_NEON;
+    if (!strcmp(s, "sme")) return KITE_BACKEND_SME;
+    return KITE_BACKEND_AUTO;
 }
 
 // Accept "K N" or "K*2^N-1" (the latter as one argument). Returns the number
@@ -54,7 +54,7 @@ static int parse_number(int argc, char **argv, int i, uint64_t *k, uint64_t *n) 
 
 typedef struct {
     uint64_t k, n;
-    ahn_opts o;
+    kite_opts o;
     double deadline;
     _Atomic int *ready;
     uint64_t iters;
@@ -64,27 +64,27 @@ typedef struct {
 static void *tp_worker(void *a) {
     tp_arg *t = a;
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-    ahn_ctx *ctx = ahn_ctx_new(t->k, t->n, -1, &t->o);
-    ahn_num *x = ahn_num_new(ctx);
-    ahn_set_u64(ctx, x, 3);
-    ahn_square_n(ctx, x, 5);
+    kite_ctx *ctx = kite_ctx_new(t->k, t->n, -1, &t->o);
+    kite_num *x = kite_num_new(ctx);
+    kite_set_u64(ctx, x, 3);
+    kite_square_n(ctx, x, 5);
     atomic_fetch_add(t->ready, 1);
     while (atomic_load(t->ready) > 0) {}  // start together
     double t0 = now();
     uint64_t it = 0;
     while (now() < t->deadline) {
-        ahn_square_n(ctx, x, 4);
+        kite_square_n(ctx, x, 4);
         it += 4;
     }
     t->secs = now() - t0;
     t->iters = it;
-    ahn_num_free(ctx, x);
-    ahn_ctx_free(ctx);
+    kite_num_free(ctx, x);
+    kite_ctx_free(ctx);
     return NULL;
 }
 
 // Run `tests` concurrent tests with `threads` threads each; returns squarings/s.
-static double throughput(uint64_t k, uint64_t n, ahn_opts o, int tests, int threads, double secs) {
+static double throughput(uint64_t k, uint64_t n, kite_opts o, int tests, int threads, double secs) {
     pthread_t th[64];
     tp_arg a[64];
     _Atomic int ready = 0;
@@ -135,8 +135,8 @@ int main(int argc, char **argv) {
         usage(argv[0]);
         return 2;
     }
-    ahn_opts o = {0};
-    ahn_prp_opts po = {0};
+    kite_opts o = {0};
+    kite_prp_opts po = {0};
     const char *expect = NULL, *out = NULL, *cfg = "1x1,5x1,10x1,1x5,2x5,1x8,5x2,2x4";
     uint64_t iters = 1000;
     uint32_t base = 3;
@@ -166,8 +166,8 @@ int main(int argc, char **argv) {
     if (!strcmp(cmd, "prp")) {
         po.fft = o;
         po.progress = progress;
-        ahn_prp_result r;
-        int rc = ahn_prp(k, n, base, &po, &r);
+        kite_prp_result r;
+        int rc = kite_prp(k, n, base, &po, &r);
         fprintf(stderr, "\r                                        \r");
         if (rc) {
             printf("%" PRIu64 "*2^%" PRIu64 "-1  ERROR %d\n", k, n, rc);
@@ -187,34 +187,34 @@ int main(int argc, char **argv) {
     }
 
     if (!strcmp(cmd, "time")) {
-        ahn_ctx *ctx = ahn_ctx_new(k, n, -1, &o);
+        kite_ctx *ctx = kite_ctx_new(k, n, -1, &o);
         if (!ctx) {
             fprintf(stderr, "cannot create context\n");
             return 1;
         }
-        ahn_num *x = ahn_num_new(ctx);
+        kite_num *x = kite_num_new(ctx);
         printf("%" PRIu64 "*2^%" PRIu64 "-1  FFT %u (%.2f bits/word)  backend %s\n", k, n,
-               ahn_fft_len(ctx), (double)n / ahn_fft_len(ctx), ahn_backend_name(ctx));
-        ahn_set_u64(ctx, x, 3);
-        ahn_square_n(ctx, x, 10);
+               kite_fft_len(ctx), (double)n / kite_fft_len(ctx), kite_backend_name(ctx));
+        kite_set_u64(ctx, x, 3);
+        kite_square_n(ctx, x, 10);
         double t0 = now();
-        ahn_square_n(ctx, x, iters);
+        kite_square_n(ctx, x, iters);
         double dt = now() - t0;
         printf("%.3f ms/iter  (%.1f us)  maxerr %.4f\n", dt * 1e3 / iters, dt * 1e6 / iters,
-               ahn_max_roundoff(ctx));
-        ahn_num_free(ctx, x);
-        ahn_ctx_free(ctx);
+               kite_max_roundoff(ctx));
+        kite_num_free(ctx, x);
+        kite_ctx_free(ctx);
         return 0;
     }
 
     if (!strcmp(cmd, "throughput")) {
-        ahn_ctx *c0 = ahn_ctx_new(k, n, -1, &o);
+        kite_ctx *c0 = kite_ctx_new(k, n, -1, &o);
         if (!c0) {
             fprintf(stderr, "cannot create context\n");
             return 1;
         }
-        o.fft_len = ahn_fft_len(c0);
-        ahn_ctx_free(c0);
+        o.fft_len = kite_fft_len(c0);
+        kite_ctx_free(c0);
         printf("%" PRIu64 "*2^%" PRIu64 "-1  FFT %u\n", k, n, o.fft_len);
         char buf[256];
         snprintf(buf, sizeof buf, "%s", cfg);
@@ -242,30 +242,30 @@ int main(int argc, char **argv) {
         // load hits them alike; record the fastest order with its time
         FILE *f = out ? fopen(out, "a") : NULL;
         for (uint32_t L = ((uint32_t)k + 63) / 64 * 64; L <= n; L += 64) {
-            ahn_ctx *c[4] = {0};
-            ahn_num *x[4] = {0};
+            kite_ctx *c[4] = {0};
+            kite_num *x[4] = {0};
             double best[4] = {1e30, 1e30, 1e30, 1e30};
             int ok = 1;
             for (int ord = 0; ord < 4 && ok; ord++) {
-                ahn_opts lo = o;
+                kite_opts lo = o;
                 lo.fft_len = L;
                 lo.plan_order = 1 + ord;
                 // any n with ~12 bits/word and k = 1 exercises the length
-                c[ord] = ahn_ctx_new(1, (uint64_t)L * 12, -1, &lo);
+                c[ord] = kite_ctx_new(1, (uint64_t)L * 12, -1, &lo);
                 if (!c[ord]) {
                     ok = 0;
                     break;
                 }
-                x[ord] = ahn_num_new(c[ord]);
-                ahn_set_u64(c[ord], x[ord], 3);
-                ahn_square_n(c[ord], x[ord], 3);
+                x[ord] = kite_num_new(c[ord]);
+                kite_set_u64(c[ord], x[ord], 3);
+                kite_square_n(c[ord], x[ord], 3);
             }
             for (int rep = 0; ok && rep < 3; rep++) {
                 for (int ord = 0; ord < 4; ord++) {
                     uint64_t it = 0;
                     double t0 = now(), t1;
                     do {
-                        ahn_square_n(c[ord], x[ord], 2);
+                        kite_square_n(c[ord], x[ord], 2);
                         it += 2;
                     } while ((t1 = now()) - t0 < 0.05);
                     double us = (t1 - t0) * 1e6 / it;
@@ -282,8 +282,8 @@ int main(int argc, char **argv) {
                 fflush(stdout);
             }
             for (int ord = 0; ord < 4; ord++) {
-                if (x[ord]) ahn_num_free(c[ord], x[ord]);
-                if (c[ord]) ahn_ctx_free(c[ord]);
+                if (x[ord]) kite_num_free(c[ord], x[ord]);
+                if (c[ord]) kite_ctx_free(c[ord]);
             }
         }
         if (f) fclose(f);

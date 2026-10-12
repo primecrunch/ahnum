@@ -1,7 +1,7 @@
 #!/bin/sh
 # Run the reference benchmarks: full PRP test, residue check, time vs reference.
-# Usage: tools/bench.sh [AHBENCH] [CSV] [extra ahbench args...]
-bench=${1:-build/ahbench}; csv=${2:-tests/benchmarks.csv}; shift 2 2>/dev/null
+# Usage: tools/bench.sh [KITE] [CSV] [extra kite args...]
+bench=${1:-build/kite}; csv=${2:-tests/benchmarks.csv}; shift 2 2>/dev/null
 grep -v '^#' "$csv" | while IFS=, read k n res ref desc; do
     out=$("$bench" prp "$k" "$n" --expect "$res" "$@" 2>/dev/null)
     rc=$?

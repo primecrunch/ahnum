@@ -25,7 +25,7 @@ static double now(void) {
 
 // Add 1 to one digit: a valid representation of a wrong value, which only
 // the Gerbicz check can catch.
-void ahn_debug_corrupt(ahn_ctx *ctx, ahn_num *x) {
+void kite_debug_corrupt(kite_ctx *ctx, kite_num *x) {
     int64_t *dig = malloc(ctx->L * sizeof(int64_t));
     ctx->ops->to_digits(ctx, x, dig);
     dig[ctx->L / 3] += 1;
@@ -63,7 +63,7 @@ static void div_small_mod_N(uint64_t *a, const uint64_t *N, size_t n, uint64_t d
 // y = base^(N+1) mod N  ->  base^(N-1) mod N, also when gcd(base, N) > 1:
 // write N = Q*M with Q built from the primes of base; the result is 0 mod Q
 // and y / base^2 mod M, combined by CRT. Returns -1 if Q does not fit.
-int ahn_residue_nm1(uint64_t *y, const uint64_t *N, size_t n, uint64_t base) {
+int kite_residue_nm1(uint64_t *y, const uint64_t *N, size_t n, uint64_t base) {
     uint64_t Q = 1, b = base;
     uint64_t *M = malloc((n + 1) * 8), *t = calloc(n + 1, 8);
     memcpy(M, N, n * 8);
@@ -186,7 +186,7 @@ static int ckpt_read(const char *path, uint64_t k, uint64_t n, uint32_t base, ui
     if (!f) return -1;
     ckpt_hdr h;
     uint64_t sum = 0;
-    int ok = fread(&h, sizeof h, 1, f) == 1 && !memcmp(h.magic, "AHNCKPT1", 8) && h.k == k &&
+    int ok = fread(&h, sizeof h, 1, f) == 1 && !memcmp(h.magic, "KITECKP1", 8) && h.k == k &&
              h.n == n && h.base == base && h.nlimbs == nl && fread(x, 8, nl, f) == nl &&
              fread(d, 8, nl, f) == nl && fread(&sum, 8, 1, f) == 1;
     fclose(f);
@@ -214,19 +214,19 @@ static void pending_clear(pending_points *p) {
     p->count = 0;
 }
 
-static void pending_add(pending_points *p, ahn_ctx *ctx, uint32_t index, const ahn_num *x) {
+static void pending_add(pending_points *p, kite_ctx *ctx, uint32_t index, const kite_num *x) {
     if (p->count == p->cap) {
         p->cap = p->cap ? 2 * p->cap : 16;
         p->index = realloc(p->index, p->cap * sizeof *p->index);
         p->limbs = realloc(p->limbs, p->cap * sizeof *p->limbs);
     }
     p->index[p->count] = index;
-    p->limbs[p->count] = malloc(ahn_limbs(ctx) * 8);
-    ahn_get_limbs(ctx, x, p->limbs[p->count]);
+    p->limbs[p->count] = malloc(kite_limbs(ctx) * 8);
+    kite_get_limbs(ctx, x, p->limbs[p->count]);
     p->count++;
 }
 
-static int pending_flush(pending_points *p, const ahn_prp_opts *o) {
+static int pending_flush(pending_points *p, const kite_prp_opts *o) {
     int rc = 0;
     for (uint32_t i = 0; i < p->count && !rc; i++)
         rc = o->on_point(o->point_arg, p->index[i], o->points[p->index[i]], p->limbs[i]);
@@ -234,12 +234,12 @@ static int pending_flush(pending_points *p, const ahn_prp_opts *o) {
     return rc;
 }
 
-int ahn_prp_checkpoint_iter(const char *path, uint64_t k, uint64_t n, uint32_t base,
+int kite_prp_checkpoint_iter(const char *path, uint64_t k, uint64_t n, uint32_t base,
                             uint64_t *iter) {
     FILE *f = fopen(path, "rb");
     if (!f) return -1;
     ckpt_hdr h;
-    int ok = fread(&h, sizeof h, 1, f) == 1 && !memcmp(h.magic, "AHNCKPT1", 8) && h.k == k &&
+    int ok = fread(&h, sizeof h, 1, f) == 1 && !memcmp(h.magic, "KITECKP1", 8) && h.k == k &&
              h.n == n && h.base == base;
     fclose(f);
     if (!ok) return -1;
@@ -250,51 +250,51 @@ int ahn_prp_checkpoint_iter(const char *path, uint64_t k, uint64_t n, uint32_t b
 // ---- driver ---------------------------------------------------------------
 
 typedef struct {
-    ahn_ctx *ctx;
-    ahn_num *x, *d, *x0, *t;
+    kite_ctx *ctx;
+    kite_num *x, *d, *x0, *t;
 } prp_state;
 
 static void state_free(prp_state *s) {
     if (!s->ctx) return;
-    ahn_num_free(s->ctx, s->x);
-    ahn_num_free(s->ctx, s->d);
-    ahn_num_free(s->ctx, s->x0);
-    ahn_num_free(s->ctx, s->t);
-    ahn_ctx_free(s->ctx);
+    kite_num_free(s->ctx, s->x);
+    kite_num_free(s->ctx, s->d);
+    kite_num_free(s->ctx, s->x0);
+    kite_num_free(s->ctx, s->t);
+    kite_ctx_free(s->ctx);
     memset(s, 0, sizeof *s);
 }
 
-static int state_new(prp_state *s, uint64_t k, uint64_t n, ahn_opts o) {
-    s->ctx = ahn_ctx_new(k, n, -1, &o);
+static int state_new(prp_state *s, uint64_t k, uint64_t n, kite_opts o) {
+    s->ctx = kite_ctx_new(k, n, -1, &o);
     if (!s->ctx) return -1;
     // sample round-off on every 4th operation: enough to spot an FFT length
     // that is too short; actual arithmetic errors are caught by Gerbicz
-    ahn_set_roundoff_check(s->ctx, 4);
-    s->x = ahn_num_new(s->ctx);
-    s->d = ahn_num_new(s->ctx);
-    s->x0 = ahn_num_new(s->ctx);
-    s->t = ahn_num_new(s->ctx);
+    kite_set_roundoff_check(s->ctx, 4);
+    s->x = kite_num_new(s->ctx);
+    s->d = kite_num_new(s->ctx);
+    s->x0 = kite_num_new(s->ctx);
+    s->t = kite_num_new(s->ctx);
     return s->x && s->d && s->x0 && s->t ? 0 : -1;
 }
 
-static int nums_equal(ahn_ctx *ctx, const ahn_num *a, const ahn_num *b, uint64_t *la,
+static int nums_equal(kite_ctx *ctx, const kite_num *a, const kite_num *b, uint64_t *la,
                       uint64_t *lb) {
-    ahn_get_limbs(ctx, a, la);
-    ahn_get_limbs(ctx, b, lb);
-    return !memcmp(la, lb, ahn_limbs(ctx) * 8);
+    kite_get_limbs(ctx, a, la);
+    kite_get_limbs(ctx, b, lb);
+    return !memcmp(la, lb, kite_limbs(ctx) * 8);
 }
 
 // base^k mod N into limbs (exact power while it is below N, then reduce
 // using the context arithmetic).
 static void power_start(prp_state *s, uint64_t k, uint32_t base, uint64_t *l) {
-    ahn_ctx *ctx = s->ctx;
-    size_t nl = ahn_limbs(ctx);
+    kite_ctx *ctx = s->ctx;
+    size_t nl = kite_limbs(ctx);
     // left-to-right binary powering with small multiplications
-    ahn_set_u64(ctx, s->x0, 1);
+    kite_set_u64(ctx, s->x0, 1);
     for (int b = 63; b >= 0; b--) {
         if (k >> b == 0) continue;
-        ahn_square(ctx, s->x0);
-        if ((k >> b) & 1) ahn_mul_small(ctx, s->x0, base);
+        kite_square(ctx, s->x0);
+        if ((k >> b) & 1) kite_mul_small(ctx, s->x0, base);
     }
     // verify against an independent computation when base^k < N
     double bits = k * log2((double)base);
@@ -311,13 +311,13 @@ static void power_start(prp_state *s, uint64_t k, uint32_t base, uint64_t *l) {
             }
             if (c) l[used++] = (uint64_t)c;
         }
-        ahn_set_limbs(ctx, s->x0, l);
+        kite_set_limbs(ctx, s->x0, l);
     }
 }
 
-int ahn_prp(uint64_t k, uint64_t n, uint32_t base, const ahn_prp_opts *opts,
-            ahn_prp_result *res) {
-    ahn_prp_opts o = opts ? *opts : (ahn_prp_opts){0};
+int kite_prp(uint64_t k, uint64_t n, uint32_t base, const kite_prp_opts *opts,
+            kite_prp_result *res) {
+    kite_prp_opts o = opts ? *opts : (kite_prp_opts){0};
     memset(res, 0, sizeof *res);
     double t_start = now();
     uint32_t B = o.gerbicz_block;
@@ -335,7 +335,7 @@ int ahn_prp(uint64_t k, uint64_t n, uint32_t base, const ahn_prp_opts *opts,
         state_free(&s);
         return -1;
     }
-    size_t nl = ahn_limbs(s.ctx);
+    size_t nl = kite_limbs(s.ctx);
     uint64_t *la = calloc(nl, 8), *lb = calloc(nl, 8);
     uint64_t *vx = calloc(nl, 8), *vd = calloc(nl, 8);  // last verified x, d
     uint64_t vi = 0;                                     // last verified iteration
@@ -343,14 +343,14 @@ int ahn_prp(uint64_t k, uint64_t n, uint32_t base, const ahn_prp_opts *opts,
     pending_points pend = {0};
 
     power_start(&s, k, base, la);
-    ahn_get_limbs(s.ctx, s.x0, vx);
+    kite_get_limbs(s.ctx, s.x0, vx);
     memcpy(vd, vx, nl * 8);
     if (o.checkpoint) {
         uint32_t L = 0;
         if (!ckpt_read(o.checkpoint, k, n, base, &vi, &L, vx, vd, nl)) {
             res->resumed = 1;
-            if (L > ahn_fft_len(s.ctx)) {
-                ahn_opts fo = o.fft;
+            if (L > kite_fft_len(s.ctx)) {
+                kite_opts fo = o.fft;
                 fo.fft_len = L;
                 state_free(&s);
                 if (state_new(&s, k, n, fo)) {
@@ -369,26 +369,26 @@ int ahn_prp(uint64_t k, uint64_t n, uint32_t base, const ahn_prp_opts *opts,
     if (o.on_point) {
         while (vp < o.npoints && o.points[vp] < vi + (vi > 0)) vp++;
         if (vp < o.npoints && o.points[vp] == 0) {  // x_0 = base^k, checked by power_start
-            ahn_set_limbs(s.ctx, s.x, vx);
+            kite_set_limbs(s.ctx, s.x, vx);
             pending_add(&pend, s.ctx, vp++, s.x);
             if (pending_flush(&pend, &o)) {
-                rc = AHN_PRP_POINT_FAILED;
+                rc = KITE_PRP_POINT_FAILED;
                 goto out;
             }
         }
     }
     for (;;) {
         // (re)start from the verified state
-        ahn_set_limbs(s.ctx, s.x, vx);
-        ahn_set_limbs(s.ctx, s.d, vd);
-        ahn_reset_roundoff(s.ctx);
+        kite_set_limbs(s.ctx, s.x, vx);
+        kite_set_limbs(s.ctx, s.d, vd);
+        kite_reset_roundoff(s.ctx);
         uint64_t i = vi;
         uint32_t pi = vp;
         int failed = 0, round_fail = 0;
         pending_clear(&pend);
         if (o.abort_flag && *o.abort_flag) {
-            if (o.checkpoint) ckpt_write(o.checkpoint, k, n, base, vi, ahn_fft_len(s.ctx), vx, vd, nl);
-            rc = AHN_PRP_ABORTED;
+            if (o.checkpoint) ckpt_write(o.checkpoint, k, n, base, vi, kite_fft_len(s.ctx), vx, vd, nl);
+            rc = KITE_PRP_ABORTED;
             goto out;
         }
         // run up to B blocks, keep d before the last update in t
@@ -396,35 +396,35 @@ int ahn_prp(uint64_t k, uint64_t n, uint32_t base, const ahn_prp_opts *opts,
         if (check_at > full) check_at = full;
         while (i < check_at) {
             for (uint32_t j = 0; j < B; j++) {
-                ahn_square(s.ctx, s.x);
+                kite_square(s.ctx, s.x);
                 i++;
                 if (o.inject_fault_at && i == o.inject_fault_at) {
-                    ahn_debug_corrupt(s.ctx, s.x);
+                    kite_debug_corrupt(s.ctx, s.x);
                     o.inject_fault_at = 0;  // once
                 }
                 if (pi < o.npoints && o.points[pi] == i && o.on_point) pending_add(&pend, s.ctx, pi++, s.x);
             }
-            if (i == check_at) ahn_copy(s.ctx, s.t, s.d);
-            ahn_mul(s.ctx, s.d, s.x);
-            if (ahn_max_roundoff(s.ctx) > maxround) {
+            if (i == check_at) kite_copy(s.ctx, s.t, s.d);
+            kite_mul(s.ctx, s.d, s.x);
+            if (kite_max_roundoff(s.ctx) > maxround) {
                 round_fail = 1;
                 break;
             }
-            if (o.progress) o.progress(o.progress_arg, i, n, ahn_max_roundoff(s.ctx));
+            if (o.progress) o.progress(o.progress_arg, i, n, kite_max_roundoff(s.ctx));
         }
         if (!round_fail && i > vi) {
             // verify d == x0 * t^(2^B)
-            ahn_square_n(s.ctx, s.t, B);
-            ahn_mul(s.ctx, s.t, s.x0);
-            if (ahn_max_roundoff(s.ctx) > maxround) round_fail = 1;
+            kite_square_n(s.ctx, s.t, B);
+            kite_mul(s.ctx, s.t, s.x0);
+            if (kite_max_roundoff(s.ctx) > maxround) round_fail = 1;
             else failed = !nums_equal(s.ctx, s.t, s.d, la, lb);
         }
-        if (ahn_max_roundoff(s.ctx) > res->maxerr) res->maxerr = ahn_max_roundoff(s.ctx);
+        if (kite_max_roundoff(s.ctx) > res->maxerr) res->maxerr = kite_max_roundoff(s.ctx);
         if (round_fail) {
             // redo from the verified state with the next larger FFT length
-            uint32_t L = ahn_fft_len(s.ctx);
-            ahn_opts fo = o.fft;
-            fo.fft_len = ahn_next_fft_len(L + L / 25);
+            uint32_t L = kite_fft_len(s.ctx);
+            kite_opts fo = o.fft;
+            fo.fft_len = kite_next_fft_len(L + L / 25);
             state_free(&s);
             if (!fo.fft_len || state_new(&s, k, n, fo)) {
                 rc = -2;
@@ -443,16 +443,16 @@ int ahn_prp(uint64_t k, uint64_t n, uint32_t base, const ahn_prp_opts *opts,
             continue;
         }
         consecutive_fail = 0;
-        ahn_get_limbs(s.ctx, s.x, vx);
-        ahn_get_limbs(s.ctx, s.d, vd);
+        kite_get_limbs(s.ctx, s.x, vx);
+        kite_get_limbs(s.ctx, s.d, vd);
         vi = i;
         vp = pi;
         if (pend.count && pending_flush(&pend, &o)) {
-            rc = AHN_PRP_POINT_FAILED;
+            rc = KITE_PRP_POINT_FAILED;
             goto out;
         }
         if (o.checkpoint && (now() - last_ck > ck_secs || vi == full)) {
-            ckpt_write(o.checkpoint, k, n, base, vi, ahn_fft_len(s.ctx), vx, vd, nl);
+            ckpt_write(o.checkpoint, k, n, base, vi, kite_fft_len(s.ctx), vx, vd, nl);
             last_ck = now();
         }
         if (vi >= full) break;
@@ -461,8 +461,8 @@ int ahn_prp(uint64_t k, uint64_t n, uint32_t base, const ahn_prp_opts *opts,
     {
         uint64_t tail = n - full;
         for (int attempt = 0;; attempt++) {
-            ahn_set_limbs(s.ctx, s.x, vx);
-            ahn_set_limbs(s.ctx, s.t, vx);
+            kite_set_limbs(s.ctx, s.x, vx);
+            kite_set_limbs(s.ctx, s.t, vx);
             // stop at each point in the tail so it can be reported
             uint64_t i = full;
             uint32_t pi = vp;
@@ -470,14 +470,14 @@ int ahn_prp(uint64_t k, uint64_t n, uint32_t base, const ahn_prp_opts *opts,
             while (i < n) {
                 uint64_t next = n;
                 if (o.on_point && pi < o.npoints && o.points[pi] > i && o.points[pi] < next) next = o.points[pi];
-                ahn_square_n(s.ctx, s.x, next - i);
-                ahn_square_n(s.ctx, s.t, next - i);
+                kite_square_n(s.ctx, s.x, next - i);
+                kite_square_n(s.ctx, s.t, next - i);
                 i = next;
                 if (o.on_point && pi < o.npoints && o.points[pi] == i) pending_add(&pend, s.ctx, pi++, s.x);
             }
             if (nums_equal(s.ctx, s.x, s.t, la, lb)) {
                 if (pend.count && pending_flush(&pend, &o)) {
-                    rc = AHN_PRP_POINT_FAILED;
+                    rc = KITE_PRP_POINT_FAILED;
                     goto out;
                 }
                 break;
@@ -500,13 +500,13 @@ int ahn_prp(uint64_t k, uint64_t n, uint32_t base, const ahn_prp_opts *opts,
         for (size_t j = 0; j < nl; j++) {
             if (Nl[j]--) break;
         }
-        if (ahn_residue_nm1(la, Nl, nl, base)) rc = -4;
+        if (kite_residue_nm1(la, Nl, nl, base)) rc = -4;
         free(Nl);
         res->res64 = la[0];
         res->is_prp = is_prp;
     }
-    res->fft_len = ahn_fft_len(s.ctx);
-    if (ahn_max_roundoff(s.ctx) > res->maxerr) res->maxerr = ahn_max_roundoff(s.ctx);
+    res->fft_len = kite_fft_len(s.ctx);
+    if (kite_max_roundoff(s.ctx) > res->maxerr) res->maxerr = kite_max_roundoff(s.ctx);
 out:
     res->seconds = now() - t_start;
     pending_clear(&pend);

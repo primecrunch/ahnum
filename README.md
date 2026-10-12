@@ -1,4 +1,4 @@
-# ahnum
+# kite
 
 Fast modular squaring of large integers modulo Riesel numbers N = k·2^n − 1 on Apple Silicon,
 built for Fermat probable-prime testing. Hot kernels are generated AArch64 NEON assembly; a
@@ -17,14 +17,14 @@ GMP (Homebrew) is needed only for the tests and `gmp_ref`.
 ## Benchmark CLI
 
 ```sh
-build/ahbench prp "9357*2^369717-1" --expect F5FDA01218F20439
+build/kite prp "9357*2^369717-1" --expect F5FDA01218F20439
 # 9357*2^369717-1 is composite  RES64 F5FDA01218F20439  FFT 28672  26.2 s (70.9 us/iter) ...
 # MATCH expected F5FDA01218F20439
 
-build/ahbench prp 69 24612729 --threads 8 --ckpt 69.ckpt   # record-size test, resumable
-build/ahbench time 9357 369717                             # us per squaring
-build/ahbench throughput 9357 369717 --configs 10x1,5x2,2x5 # tests x threads splits
-build/ahbench tune 8192 196608 --out ~/.ahnum/fft_times.txt # measure FFT lengths
+build/kite prp 69 24612729 --threads 8 --ckpt 69.ckpt   # record-size test, resumable
+build/kite time 9357 369717                             # us per squaring
+build/kite throughput 9357 369717 --configs 10x1,5x2,2x5 # tests x threads splits
+build/kite tune 8192 196608 --out ~/.kite/fft_times.txt # measure FFT lengths
 ```
 
 RES64 is the low 64 bits of 3^(N−1) mod N in upper-case hex (primecrunch convention). A PRP has
@@ -35,17 +35,17 @@ Options: `--threads T`, `--fft L` (force a length), `--order 0..3` (force an FFT
 `--ckpt FILE` / `--ckpt-secs S` (checkpoint/resume), `--block B` (Gerbicz block),
 `--fault ITER` (inject a digit error to exercise the Gerbicz check).
 
-## PRST-compatible CLI (`ahprst`)
+## PRST-compatible CLI (`kite-prst`)
 
-`build/ahprst` accepts a subset of PRST's command line for k·2^n − 1: Fermat tests, `-proof save/build/cert` and progress output, with checkpoints on SIGTERM.
-Other tests, LLR included, are passed to PRST (`$AHPRST_PRST`, or `prst` next to
-`ahprst`). Proof points, products and certificates are byte-identical to PRST 14.0's, and each
+`build/kite-prst` accepts a subset of PRST's command line for k·2^n − 1: Fermat tests, `-proof save/build/cert` and progress output, with checkpoints on SIGTERM.
+Other tests, LLR included, are passed to PRST (`$KITE_PRST`, or `prst` next to
+`kite-prst`). Proof points, products and certificates are byte-identical to PRST 14.0's, and each
 program verifies the other's certificates; see `docs/prst-compat.md`.
 
 ```sh
-build/ahprst "9001*2^2000003-1" -d -fermat a 3 -proof save 512
-build/ahprst "9001*2^2000003-1" -d -fermat a 3 -proof build 512
-build/ahprst "9001*2^2000003-1" -d -proof cert prst_<fingerprint>.cert
+build/kite-prst "9001*2^2000003-1" -d -fermat a 3 -proof save 512
+build/kite-prst "9001*2^2000003-1" -d -fermat a 3 -proof build 512
+build/kite-prst "9001*2^2000003-1" -d -proof cert prst_<fingerprint>.cert
 ```
 
 PRST is by Pavel Atnashev (https://github.com/patnashev/prst). The proof code in
@@ -93,25 +93,25 @@ It may still pay on a desktop with a bigger power budget.
 ```sh
 tools/primecrunch_fetch.py 9357:369717                       # print k,n,res64,source
 tools/primecrunch_fetch.py --k 9357 --n-from 369500 --n-to 369699 --append tests/known_residues.csv
-tests/run_known.sh build/ahbench tests/known_residues.csv 1000000
+tests/run_known.sh build/kite tests/known_residues.csv 1000000
 ```
 
 The fetcher uses the public `GET /v2/k/{k}/n/{n}` on `https://api.primecrunch.com` and uses
 completed `fermat` jobs only. The `servers` entry in the primecrunch OpenAPI spec
 (`https://primecrunch.com`) serves the web app, not the API.
 
-## Library API (`include/ahnum.h`)
+## Library API (`include/kite.h`)
 
 ```c
-ahn_prp_opts o = {0};               // o.fft.threads, o.checkpoint, o.progress, ...
-ahn_prp_result r;
-if (ahn_prp(9357, 369717, 3, &o, &r) == 0)
+kite_prp_opts o = {0};               // o.fft.threads, o.checkpoint, o.progress, ...
+kite_prp_result r;
+if (kite_prp(9357, 369717, 3, &o, &r) == 0)
     printf("%016llX %s\n", r.res64, r.is_prp ? "PRP" : "composite");
 ```
 
-Lower level: `ahn_ctx_new(k, n, -1, &opts)`, `ahn_num_new`, `ahn_set_u64` / `ahn_set_limbs`,
-`ahn_square`, `ahn_square_n`, `ahn_mul`, `ahn_mul_small`, `ahn_get_limbs`, `ahn_res64`,
-`ahn_max_roundoff`.
+Lower level: `kite_ctx_new(k, n, -1, &opts)`, `kite_num_new`, `kite_set_u64` / `kite_set_limbs`,
+`kite_square`, `kite_square_n`, `kite_mul`, `kite_mul_small`, `kite_get_limbs`, `kite_res64`,
+`kite_max_roundoff`.
 
 ## How it works
 
@@ -135,20 +135,20 @@ Stages are radix 2/3/4/5/7/8, so lengths are 2^a·3^b·5^c·7^d·64.
 **Kernels** (`gen/gen_kernels.py` → `build/asm/*.S`):
 - DIF/DIT stage kernels per radix, with by-element twiddle FMAs and four-step-twiddle variants.
   DIT stages of radix 2/3/4/8 use a tangent form, w = c(1 + iτ): two FMAs per twiddle, with
-  c folded into the butterfly's own FMAs (`AHN_NO_TAN=1` selects the plain complex multiply).
+  c folded into the butterfly's own FMAs (`KITE_NO_TAN=1` selects the plain complex multiply).
 - Normalisers: compressed-weight and table-driven variants. The table variants work each digit
   in place from a {osc, 1/base, base·w} record, and the 8-row version keeps four carry chains
   in flight to hide FP latency.
 - Row transposes and the real-split kernel.
 
 At 4.49 GHz all of them run at about 4 FP instructions per cycle in isolation, the limit of the
-4 NEON pipes. In the full squaring the passes that load from L2 run lower; `AHN_PROF=1` prints a
+4 NEON pipes. In the full squaring the passes that load from L2 run lower; `KITE_PROF=1` prints a
 per-phase time split, and `tools/count_ops.py build/asm` counts each kernel's instructions.
 
 **FFT length** comes from a fitted round-off model. Measured: bpw_max ≈ 21.44 −
 0.305·(log2 L − 12) − 0.525·log2 k, less a 0.45 margin. Among the safe lengths, the fastest is
-taken from `~/.ahnum/fft_times.txt` (or `$AHN_FFT_TIMES`); without that file a heuristic is
-used. Each line is "L us order": `ahbench tune` times the four stage orders (column and row
+taken from `~/.kite/fft_times.txt` (or `$KITE_FFT_TIMES`); without that file a heuristic is
+used. Each line is "L us order": `kite tune` times the four stage orders (column and row
 radices in the default order or ascending) and records the fastest, since which is faster
 depends on the length. `tune/fft_times_m4pro.txt` holds measurements for this machine.
 
@@ -187,13 +187,13 @@ transform length (32768).
 
 At n ≈ 370K, splitting a test across threads loses throughput (5×2 gives 892 tests/hour, 1×10
 gives 510), so run one test per core. For record sizes, run one test across all P-cores.
-`ahbench throughput` measures the best split for a given size.
+`kite throughput` measures the best split for a given size.
 
 ## SME (M4) — measured, not used by default
 
 `--backend sme` runs the pass-1 radix-8 column stages on the SME unit. Each stage becomes 8×8
 complex matrix products (FP64 FMOPA), with the twiddles folded into per-j matrices
-(`ahn_sme_r8`). It is correct (GMP and primecrunch tests pass), but it is slower end to end:
+(`kite_sme_r8`). It is correct (GMP and primecrunch tests pass), but it is slower end to end:
 
 - The FMOPA rate is 492 GFLOPS from one core. A radix-8 stage needs 32 outer products per
   8-point × 8-lane item, which gives 0.85 cycles/point against 1.3 for NEON in isolation.
@@ -210,7 +210,7 @@ The probes are in `tools/sme_probe.*`, plus `kbench 4.49 sme` and `kbench 4.49 h
 ## Layout
 
 ```
-include/ahnum.h       public API
+include/kite.h       public API
 src/ctx.c             layout, weights, carries/fold, FFT length choice, conversions
 src/neon.c            NEON backend (two-pass, threads); `sme` variant of it
 src/prp.c             Fermat PRP driver: Gerbicz, round-off fallback, checkpoints
@@ -218,6 +218,6 @@ src/threads.c         fork-join pool
 src/fast2p.c          same algorithm in portable C (independent cross-check)
 src/ref_fft.c         scalar reference backend (oracle, tiny sizes)
 gen/gen_kernels.py    assembly generator
-tools/                ahbench, gmp_ref, xcheck, kbench, sweep_err, fit_bpw.py, sme_probe
+tools/                kite, gmp_ref, xcheck, kbench, sweep_err, fit_bpw.py, sme_probe
 tests/                GMP comparisons, stage-kernel tests, known residues
 ```

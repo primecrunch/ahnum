@@ -37,18 +37,18 @@ int main(int argc, char **argv) {
         uint32_t C = argc > 2 ? (uint32_t)atoi(argv[2]) : 256;
         uint32_t B = argc > 3 ? (uint32_t)atoi(argv[3]) : 64;
         uint32_t iters = argc > 4 ? (uint32_t)atoi(argv[4]) : 50;
-        int fuse = getenv("AHN_GPU_FUSE") != NULL;
-        // AHN_GPU_SHOUP (register kernels): twiddle tables of (w, floor(w * 2^32 / p))
-        int shoup = getenv("AHN_GPU_SHOUP") != NULL;
+        int fuse = getenv("KITE_GPU_FUSE") != NULL;
+        // KITE_GPU_SHOUP (register kernels): twiddle tables of (w, floor(w * 2^32 / p))
+        int shoup = getenv("KITE_GPU_SHOUP") != NULL;
         size_t tws = shoup ? 8 : 4;  // bytes per twiddle entry
         // threads per threadgroup matched to the work per stage step
         // (radix-2: L/2 butterflies; fused radix-2^2: L/4 groups of 4)
         uint32_t N = R * C, G = 16, TPG_ROW = (fuse ? C / 4 : C / 2) < 256 ? (fuse ? C / 4 : C / 2) : 256;
         uint32_t TPG_COL = fuse ? 128 : 256;
         uint32_t rbits = __builtin_ctz(R);
-        // AHN_GPU_REG: register-based kernels (gpu/ntt_reg.metal), each length
+        // KITE_GPU_REG: register-based kernels (gpu/ntt_reg.metal), each length
         // split as A x B with A = 2^floor(log2(L) / 2), B = L / A >= A
-        int reg = getenv("AHN_GPU_REG") != NULL;
+        int reg = getenv("KITE_GPU_REG") != NULL;
         uint32_t AR = 1u << (__builtin_ctz(R) / 2), BR = R / AR;
         uint32_t AC = 1u << (__builtin_ctz(C) / 2), BC = C / AC, RT = 8;
 
@@ -212,9 +212,9 @@ int main(int argc, char **argv) {
         }
 
         // timing: iters squarings of all B numbers in one command buffer;
-        // AHN_GPU_SECS=S keeps going for S seconds and reports the average
-        // (for runs alongside CPU load), optionally duty-cycled (AHN_GPU_DUTY)
-        const char *secs_env = getenv("AHN_GPU_SECS");
+        // KITE_GPU_SECS=S keeps going for S seconds and reports the average
+        // (for runs alongside CPU load), optionally duty-cycled (KITE_GPU_DUTY)
+        const char *secs_env = getenv("KITE_GPU_SECS");
         if (secs_env) {
             double secs = atof(secs_env), busy = 0;
             uint64_t sq = 0;
@@ -229,8 +229,8 @@ int main(int argc, char **argv) {
                 double dt = cb.GPUEndTime - cb.GPUStartTime;
                 busy += dt;
                 sq += (uint64_t)iters * B;
-                // AHN_GPU_DUTY=f (0 < f <= 1): idle so the GPU runs a fraction f of the time
-                const char *duty = getenv("AHN_GPU_DUTY");
+                // KITE_GPU_DUTY=f (0 < f <= 1): idle so the GPU runs a fraction f of the time
+                const char *duty = getenv("KITE_GPU_DUTY");
                 if (duty && atof(duty) > 0 && atof(duty) < 1)
                     [NSThread sleepForTimeInterval:dt * (1 / atof(duty) - 1)];
             }

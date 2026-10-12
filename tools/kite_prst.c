@@ -1,6 +1,6 @@
-// ahprst: a slice of PRST's command line (Fermat tests and proofs of k*2^n-1), on ahnum.
+// kite-prst: a slice of PRST's command line (Fermat tests and proofs of k*2^n-1), on kite.
 // See docs/prst-compat.md. Anything outside that slice (LLR, other forms) is handed to PRST:
-// $AHPRST_PRST, or `prst` next to this binary.
+// $KITE_PRST, or `prst` next to this binary.
 #include <inttypes.h>
 #include <libgen.h>
 #include <math.h>
@@ -12,7 +12,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-#include "ahnum.h"
+#include "kite.h"
 #include "prstproof.h"
 
 #define PROGRESS_BLANK "                                                                      "
@@ -55,7 +55,7 @@ static void result_save(const char *fmt, ...) {
 }
 
 static void hand_to_prst(char **argv) {
-    const char *env = getenv("AHPRST_PRST");
+    const char *env = getenv("KITE_PRST");
     char path[4096];
     if (env && *env) {
         snprintf(path, sizeof path, "%s", env);
@@ -66,7 +66,7 @@ static void hand_to_prst(char **argv) {
     }
     argv[0] = path;
     execv(path, argv);
-    fprintf(stderr, "ahprst: cannot run PRST at %s for this test\n", path);
+    fprintf(stderr, "kite-prst: cannot run PRST at %s for this test\n", path);
     exit(2);
 }
 
@@ -93,7 +93,7 @@ static int parse_expr(args *A, const char *s) {
     return 0;
 }
 
-// Returns 0 if handled by ahprst, 1 to hand to PRST, -1 on a usage error.
+// Returns 0 if handled by kite-prst, 1 to hand to PRST, -1 on a usage error.
 static int parse(args *A, int argc, char **argv) {
     memset(A, 0, sizeof *A);
     A->a = 3;
@@ -109,7 +109,7 @@ static int parse(args *A, int argc, char **argv) {
         } else if (!strcmp(s, "-t")) {
             A->threads = atoi(NEXT);
         } else if (!strcmp(s, "-cpu")) {
-            (void)NEXT;  // ahnum picks its own kernels
+            (void)NEXT;  // kite picks its own kernels
         } else if (!strcmp(s, "-fermat")) {
             A->fermat = 1;
             if (i + 2 < argc && !strcmp(argv[i + 1], "a")) {
@@ -170,10 +170,10 @@ static void fft_label(uint32_t L, char *buf, size_t len) {
     else snprintf(buf, len, "%u", L);
 }
 
-static ahn_ctx *open_ctx(const args *A, ahn_opts *o) {
+static kite_ctx *open_ctx(const args *A, kite_opts *o) {
     memset(o, 0, sizeof *o);
     o->threads = A->threads > 1 ? (uint32_t)A->threads : 1;
-    return ahn_ctx_new(A->k, A->n, -1, o);
+    return kite_ctx_new(A->k, A->n, -1, o);
 }
 
 static void announce_fft(const args *A, uint32_t L) {
@@ -231,13 +231,13 @@ static int write_point(void *arg, uint32_t index, uint64_t iter, const uint64_t 
 }
 
 static int run_fermat(const args *A) {
-    ahn_opts o;
-    ahn_ctx *ctx = open_ctx(A, &o);
+    kite_opts o;
+    kite_ctx *ctx = open_ctx(A, &o);
     if (!ctx) {
-        fprintf(stderr, "ahprst: cannot set up arithmetic for %s\n", A->expr);
+        fprintf(stderr, "kite-prst: cannot set up arithmetic for %s\n", A->expr);
         return 1;
     }
-    uint32_t L = ahn_fft_len(ctx);
+    uint32_t L = kite_fft_len(ctx);
     uint32_t B = (uint32_t)sqrt((double)A->n);
     if (B < 32) B = 32;
     if (B > 2000) B = 2000;
@@ -247,7 +247,7 @@ static int run_fermat(const args *A) {
     out("Fermat probabilistic test of %s, a = %u, complexity = %" PRIu64 ".\n", A->expr, A->a,
         complexity);
     if (A->fft_info) {
-        ahn_ctx_free(ctx);
+        kite_ctx_free(ctx);
         return 0;
     }
     // a divides N: PRST reports the factor (fermat.cpp:350)
@@ -258,18 +258,18 @@ static int run_fermat(const args *A) {
         if ((A->k % A->a * r + A->a - 1) % A->a == 0) {
             out("%s is not prime, divisible by %u.\n", A->expr, A->a);
             result_save("%s is not prime, divisible by %u.\n", A->expr, A->a);
-            ahn_ctx_free(ctx);
+            kite_ctx_free(ctx);
             return 0;
         }
     }
     out("%s Gerbicz check enabled, L2 = %u*%u.\n", A->expr, B, Mb);
 
-    run_state R = {.A = A, .nlimbs = ahn_limbs(ctx)};
+    run_state R = {.A = A, .nlimbs = kite_limbs(ctx)};
     uint32_t fpN = pp_fingerprint(A->k, A->n);
     snprintf(R.prefix, sizeof R.prefix, "prst_%u", fpN);
     char ckpt[96];
-    snprintf(ckpt, sizeof ckpt, "ahprst_%u.%u.ckpt", fpN, A->a);
-    ahn_prp_opts po = {0};
+    snprintf(ckpt, sizeof ckpt, "kite_%u.%u.ckpt", fpN, A->a);
+    kite_prp_opts po = {0};
     po.fft = o;
     po.checkpoint = ckpt;
     po.checkpoint_secs = 300;
@@ -278,7 +278,7 @@ static int run_fermat(const args *A) {
     po.abort_flag = &abort_flag;
     if (A->proof_op == 1) {
         if (A->n > INT32_MAX) {
-            fprintf(stderr, "ahprst: n too large for PRST proof files\n");
+            fprintf(stderr, "kite-prst: n too large for PRST proof files\n");
             return 1;
         }
         R.fpP = pp_proof_fingerprint(A->k, A->n, A->a);
@@ -290,17 +290,17 @@ static int run_fermat(const args *A) {
         po.point_arg = &R;
         out("%s Saving %d proof points.\n", A->expr, A->proof_count);
     }
-    ahn_ctx_free(ctx);
+    kite_ctx_free(ctx);
 
     {  // announce a resume before the test starts, as PRST does
         uint64_t at;
-        if (ahn_prp_checkpoint_iter(ckpt, A->k, A->n, A->a, &at) == 0 && at > 0)
+        if (kite_prp_checkpoint_iter(ckpt, A->k, A->n, A->a, &at) == 0 && at > 0)
             out("%s restarting at %.1f%%.\n", A->expr, 100.0 * (double)at / (double)A->n);
     }
     R.t0 = R.last = now();
-    ahn_prp_result res;
-    int rc = ahn_prp(A->k, A->n, A->a, &po, &res);
-    if (rc == AHN_PRP_ABORTED) {
+    kite_prp_result res;
+    int rc = kite_prp(A->k, A->n, A->a, &po, &res);
+    if (rc == KITE_PRP_ABORTED) {
         out("Terminating...\n");
         free(R.pos);
         return 1;
@@ -325,12 +325,12 @@ static int run_fermat(const args *A) {
     }
     if (A->proof_op == 1) {
         double t = now();
-        ahn_ctx *c2 = open_ctx(A, &o);
+        kite_ctx *c2 = open_ctx(A, &o);
         uint64_t raw = 0;
         int prc = c2 ? pp_save_products(c2, A->k, A->n, A->a, A->proof_count, R.prefix,
                                         A->proof_keep, &raw)
                      : -1;
-        if (c2) ahn_ctx_free(c2);
+        if (c2) kite_ctx_free(c2);
         free(R.pos);
         if (prc) return 1;
         int depth = 0;
@@ -347,20 +347,20 @@ static int run_fermat(const args *A) {
 // ---- certificate build and check ---------------------------------------------------------
 
 static int run_build(const args *A) {
-    ahn_opts o;
-    ahn_ctx *ctx = open_ctx(A, &o);
+    kite_opts o;
+    kite_ctx *ctx = open_ctx(A, &o);
     if (!ctx) return 1;
     uint32_t fpN = pp_fingerprint(A->k, A->n);
     char prefix[64];
     snprintf(prefix, sizeof prefix, "prst_%u", fpN);
     double t = now();
-    announce_fft(A, ahn_fft_len(ctx));
+    announce_fft(A, kite_fft_len(ctx));
     int depth = 0;
     while ((1 << depth) < A->proof_count) depth++;
     out("%s Building certificate from %d products.\n", A->expr, depth);
     uint64_t res = 0;
     int rc = pp_build_cert(ctx, A->k, A->n, A->a, A->proof_count, prefix, A->proof_keep, &res);
-    ahn_ctx_free(ctx);
+    kite_ctx_free(ctx);
     if (rc) return 1;
     out("%s certificate RES64: %016" PRIX64 ", time: %.1f s.\n", A->expr, res, now() - t);
     result_save("%s certificate RES64: %016" PRIX64 ", time: %d s.\n", A->expr, res,
@@ -369,8 +369,8 @@ static int run_build(const args *A) {
 }
 
 static int run_cert(const args *A) {
-    ahn_opts o;
-    ahn_ctx *ctx = open_ctx(A, &o);
+    kite_opts o;
+    kite_ctx *ctx = open_ctx(A, &o);
     if (!ctx) return 1;
     char path[4096];
     if (!A->cert_path || !strcmp(A->cert_path, "default"))
@@ -378,11 +378,11 @@ static int run_cert(const args *A) {
     else
         snprintf(path, sizeof path, "%s", A->cert_path);
     double t = now();
-    announce_fft(A, ahn_fft_len(ctx));
+    announce_fft(A, kite_fft_len(ctx));
     uint64_t res = 0;
     uint32_t M = 0;
     int rc = pp_verify_cert(ctx, A->k, A->n, path, &res, &M);
-    ahn_ctx_free(ctx);
+    kite_ctx_free(ctx);
     if (rc) return 1;
     out("Verifying certificate of %s, complexity = %u.\n", A->expr, M);
     out("%s certificate RES64: %016" PRIX64 ", time: %.1f s.\n", A->expr, res, now() - t);
@@ -402,7 +402,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     if (A.version) {
-        printf("ahnum version %s\n", AHNUM_VERSION);
+        printf("kite version %s\n", KITE_VERSION);
         return 0;
     }
     signal(SIGTERM, on_signal);

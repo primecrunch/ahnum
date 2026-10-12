@@ -19,7 +19,7 @@
 # check also waits for thermal pressure 0 (nominal; 1 moderate, 2 heavy), and log records it:
 # on a laptop the clocks drop ~10% at moderate/heavy, so a warm start skews the result.
 
-OURS=${OURS:-'^(ahbench|gpu_prp|gpu_sq|prst|ps|awk|sh|zsh|bash|sleep|sysctl|date|quiet\.sh)$'}
+OURS=${OURS:-'^(kite|kite-prst|gpu_prp|gpu_sq|prst|ps|awk|sh|zsh|bash|sleep|sysctl|date|quiet\.sh)$'}
 PROC_MAX=${PROC_MAX:-20}
 TOTAL_MAX=${TOTAL_MAX:-50}
 LOG_MIN=${LOG_MIN:-5}

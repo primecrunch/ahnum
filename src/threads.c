@@ -8,20 +8,20 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 
-struct ahn_pool {
+struct kite_pool {
     int n;
     pthread_t *th;
     _Atomic uint64_t gen;
     _Atomic int remaining;
     _Atomic int quit;
-    ahn_pool_fn fn;
+    kite_pool_fn fn;
     void *arg;
     pthread_mutex_t mu;
     pthread_cond_t cv;
 };
 
 typedef struct {
-    ahn_pool *p;
+    kite_pool *p;
     int id;
 } worker_arg;
 
@@ -39,7 +39,7 @@ static inline uint64_t tick_freq(void) {
 
 static void *worker(void *a) {
     worker_arg *wa = a;
-    ahn_pool *p = wa->p;
+    kite_pool *p = wa->p;
     int id = wa->id;
     free(wa);
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
@@ -64,9 +64,9 @@ static void *worker(void *a) {
     }
 }
 
-ahn_pool *ahn_pool_new(int n) {
+kite_pool *kite_pool_new(int n) {
     if (n < 1) n = 1;
-    ahn_pool *p = calloc(1, sizeof *p);
+    kite_pool *p = calloc(1, sizeof *p);
     p->n = n;
     if (n > 1) pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
     pthread_mutex_init(&p->mu, NULL);
@@ -81,7 +81,7 @@ ahn_pool *ahn_pool_new(int n) {
     return p;
 }
 
-void ahn_pool_free(ahn_pool *p) {
+void kite_pool_free(kite_pool *p) {
     if (!p) return;
     pthread_mutex_lock(&p->mu);
     atomic_store(&p->quit, 1);
@@ -94,9 +94,9 @@ void ahn_pool_free(ahn_pool *p) {
     free(p);
 }
 
-int ahn_pool_size(const ahn_pool *p) { return p ? p->n : 1; }
+int kite_pool_size(const kite_pool *p) { return p ? p->n : 1; }
 
-void ahn_pool_run(ahn_pool *p, ahn_pool_fn fn, void *arg) {
+void kite_pool_run(kite_pool *p, kite_pool_fn fn, void *arg) {
     if (!p || p->n == 1) {
         fn(arg, 0, 1);
         return;

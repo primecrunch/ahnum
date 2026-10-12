@@ -1,17 +1,17 @@
-# PRST compatibility (`ahprst`)
+# PRST compatibility (`kite-prst`)
 
-PRST is by Pavel Atnashev (https://github.com/patnashev/prst). ahnum's proof code
+PRST is by Pavel Atnashev (https://github.com/patnashev/prst). kite's proof code
 (`src/prstproof.c`) reimplements PRST's proof construction and file format, following its
 `src/proof.cpp` and the `arithmetic` framework's `file.cpp`, so that certificates made by
 either program verify with the other.
 
-`ahprst` stands in for `prst` for Fermat tests and proofs of k·2^n − 1. This file lists the
+`kite-prst` stands in for `prst` for Fermat tests and proofs of k·2^n − 1. This file lists the
 arguments, output and files it reproduces, checked against PRST 14.0.1888 (x86, under
 Rosetta) and the PRST 14.1 source.
 
 Only numbers k·2^n − 1 with small k are in scope. For those PRST's Fermat test takes its
 "smooth" path (`fermat.cpp`: b = 2, log2 k < n/4): x_0 = a^k, n squarings, then the tail
-a^−2, so RES64 is the low 64 bits of a^(N−1), the same as ahnum's.
+a^−2, so RES64 is the low 64 bits of a^(N−1), the same as kite's.
 
 ## Command lines
 
@@ -35,7 +35,7 @@ EXPR is `K*2^N-1`. Everything runs in the working directory: checkpoints, proof 
 Lines end with `\n`, except progress readings, which end with ` \r` and are followed by 70
 spaces and `\r` before the next line. Prefix = `EXPR ` on per-test lines.
 
-    Using FFT length 6K.                                   (ahprst: names its own transform)
+    Using FFT length 6K.                                   (kite-prst: names its own transform)
     Fermat probabilistic test of EXPR, a = 3, complexity = C.
     EXPR Gerbicz check enabled, L2 = A*B.
     EXPR restarting at P%.                                 (resumed from a checkpoint)
@@ -60,7 +60,7 @@ Patterns a caller can rely on: progress `(\d+(\.\d+)?)% (done|total), time per o
 `Fermat probabilistic test of .*, a = (\d+)`, `complexity = (\d+)`,
 `Using (.*?)\s*FFT length (\d+)([KM]?)`.
 
-`-v` prints `ahnum version a.b.c`, not PRST's `PRST version X, GWnum library version Y`.
+`-v` prints `kite version a.b.c`, not PRST's `PRST version X, GWnum library version Y`.
 
 ## result.txt
 
@@ -101,21 +101,21 @@ certificate carries `fp(N)` and the point and product files carry `unique(fp(N),
 Save deletes points 1..511 unless `keep`; build deletes points 0 and 512 and the products.
 Point positions, the product tree, the challenge hashes (`MD5(u32 fp(N) ‖ Y words ‖ product
 words)`, made odd and free of prime factors below 1000) and the certificate exponentiations
-follow `src/proof.cpp` exactly; `ahnum/src/proof.c` cites the lines it ports.
+follow `src/proof.cpp` exactly; `src/prstproof.c` cites the lines it ports.
 
-## ahprst specifics and gaps
+## kite-prst specifics and gaps
 
-- `-v` prints `ahnum version a.b.c` (`AHNUM_VERSION` in `include/ahnum.h`).
-- The FFT line names ahnum's transform, e.g. `Using NEON FFT length 48K.`; lengths that are
+- `-v` prints `kite version a.b.c` (`KITE_VERSION` in `include/kite.h`).
+- The FFT line names kite's transform, e.g. `Using NEON FFT length 48K.`; lengths that are
   not a multiple of 1024 print in full (`26880`), which the FFT pattern above accepts.
 - `complexity` is n + n/B (squarings plus the Gerbicz multiplications), so complexity × time
   per op is the length of the test.
-- Checkpoints are ahnum's own format, `ahprst_FP.A.ckpt`, written every 300 s and on SIGTERM.
+- Checkpoints are kite's own format, `kite_FP.A.ckpt`, written every 300 s and on SIGTERM.
   A PRST checkpoint left in the directory is ignored; the test starts again.
 - Proof points are written only after the Gerbicz check covering them passes, so an
   interrupted run never leaves an unverified point on disk.
-- Anything outside the table above, LLR included, is handed to PRST: `$AHPRST_PRST`, or
-  `prst` next to the `ahprst` binary.
+- Anything outside the table above, LLR included, is handed to PRST: `$KITE_PRST`, or
+  `prst` next to the `kite-prst` binary.
 - Not implemented yet: the roots-of-unity check PRST runs during `-proof build` (a safety
   check on the residue; it does not change any file or RES64), Gerbicz–Li certificates
   (only made for non-smooth tests, out of scope here), and resuming the
@@ -126,8 +126,8 @@ follow `src/proof.cpp` exactly; `ahnum/src/proof.c` cites the lines it ports.
 
 Tested (`tests/prst_compat.sh`, and by hand against PRST 14.0.1888 under Rosetta):
 1203·2^90001 − 1 and 1203·2^400001 − 1 (interrupted with SIGTERM and resumed) give point,
-product and certificate files identical to PRST's; PRST verifies ahprst's certificates and
-builds from its points; ahprst verifies PRST's certificates. 9001·2^2000003 − 1, with 4
+product and certificate files identical to PRST's; PRST verifies kite-prst's certificates and
+builds from its points; kite-prst verifies PRST's certificates. 9001·2^2000003 − 1, with 4
 threads each: same RES64 (6B2FB550F09B6CBD), identical
 certificate files (certificate RES64 3B9230016377CE4A), and each program verifies the
 other's certificate.

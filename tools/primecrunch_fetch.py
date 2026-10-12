@@ -31,7 +31,7 @@ API = "https://api.primecrunch.com"
 def fetch(k, n):
     req = urllib.request.Request(f"{API}/v2/k/{k}/n/{n}",
                                  headers={"Accept": "application/json",
-                                          "User-Agent": "ahnum-regression/0.1"})
+                                          "User-Agent": "kite-regression/0.1"})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.load(r)

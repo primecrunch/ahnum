@@ -15,21 +15,21 @@
 // therefore produces k*V^2. To make that consistent the stored value is
 // V = x/k (mod N), i.e. x*2^n: S(x)^2 * k = S(x^2).
 // Multiplication by a small constant is done on the digits without the k.
-#ifndef AHN_INTERNAL_H
-#define AHN_INTERNAL_H
+#ifndef KITE_INTERNAL_H
+#define KITE_INTERNAL_H
 
-#include "ahnum.h"
+#include "kite.h"
 
 #include <stdbool.h>
 #include <stdio.h>
 
-typedef struct ahn_backend_ops ahn_backend_ops;
+typedef struct kite_backend_ops kite_backend_ops;
 
-struct ahn_num {
+struct kite_num {
     double *d;  // backend-defined layout, ctx->num_doubles doubles
 };
 
-struct ahn_ctx {
+struct kite_ctx {
     uint64_t k, n;
     int32_t c;
     uint32_t L;           // FFT length in real words
@@ -48,51 +48,51 @@ struct ahn_ctx {
     double maxerr;
     uint32_t err_every;   // check round-off every N-th operation (1 = always)
     uint64_t op_count;
-    const ahn_backend_ops *ops;
+    const kite_backend_ops *ops;
     void *bk;             // backend private state
-    size_t num_doubles;   // doubles per ahn_num
+    size_t num_doubles;   // doubles per kite_num
     int64_t *tmpdig;      // L digits scratch
 };
 
 // Backends convert between their storage and balanced integer digits.
-struct ahn_backend_ops {
+struct kite_backend_ops {
     const char *name;
-    int (*init)(ahn_ctx *ctx);
-    void (*free)(ahn_ctx *ctx);
-    void (*to_digits)(ahn_ctx *ctx, const ahn_num *x, int64_t *dig);
-    void (*from_digits)(ahn_ctx *ctx, ahn_num *x, const int64_t *dig);
-    void (*square)(ahn_ctx *ctx, ahn_num *x);
-    void (*mul)(ahn_ctx *ctx, ahn_num *x, const ahn_num *y);
-    void (*mul_small)(ahn_ctx *ctx, ahn_num *x, int64_t m);
+    int (*init)(kite_ctx *ctx);
+    void (*free)(kite_ctx *ctx);
+    void (*to_digits)(kite_ctx *ctx, const kite_num *x, int64_t *dig);
+    void (*from_digits)(kite_ctx *ctx, kite_num *x, const int64_t *dig);
+    void (*square)(kite_ctx *ctx, kite_num *x);
+    void (*mul)(kite_ctx *ctx, kite_num *x, const kite_num *y);
+    void (*mul_small)(kite_ctx *ctx, kite_num *x, int64_t m);
 };
 
-extern const ahn_backend_ops ahn_ref_ops;
-extern const ahn_backend_ops ahn_f2_ops;
-extern const ahn_backend_ops ahn_neon_ops;
-extern const ahn_backend_ops ahn_sme_ops;
+extern const kite_backend_ops kite_ref_ops;
+extern const kite_backend_ops kite_f2_ops;
+extern const kite_backend_ops kite_neon_ops;
+extern const kite_backend_ops kite_sme_ops;
 
 // Carry-propagate integer digits (any magnitude < 2^62) into balanced form,
 // wrapping the top carry into digit 0.
-void ahn_carry_digits(const ahn_ctx *ctx, int64_t *dig);
+void kite_carry_digits(const kite_ctx *ctx, int64_t *dig);
 
 // Choose an FFT length for (k, n).
-uint32_t ahn_choose_fft_len(uint64_t k, uint64_t n);
-uint32_t ahn_next_fft_len(uint32_t L);
-uint32_t ahn_tuned_plan_order(uint32_t L);
+uint32_t kite_choose_fft_len(uint64_t k, uint64_t n);
+uint32_t kite_next_fft_len(uint32_t L);
+uint32_t kite_tuned_plan_order(uint32_t L);
 // y = base^(N+1) mod N (n limbs) -> base^(N-1) mod N, also when gcd(base, N) > 1
 // (src/prp.c); returns -1 if the base-prime part of N does not fit a word.
-int ahn_residue_nm1(uint64_t *y, const uint64_t *N, size_t n, uint64_t base);
-double ahn_safe_bpw(uint32_t L, uint64_t k);
+int kite_residue_nm1(uint64_t *y, const uint64_t *N, size_t n, uint64_t base);
+double kite_safe_bpw(uint32_t L, uint64_t k);
 // Layout helpers shared by the backends (exact rational arithmetic in T').
-uint64_t ahn_s_at(const ahn_ctx *ctx, uint64_t j);
-double ahn_weight(const ahn_ctx *ctx, uint64_t j, uint64_t sj);
-bool ahn_fft_len_ok(uint32_t L);
+uint64_t kite_s_at(const kite_ctx *ctx, uint64_t j);
+double kite_weight(const kite_ctx *ctx, uint64_t j, uint64_t sj);
+bool kite_fft_len_ok(uint32_t L);
 // Tangent-form DIT twiddles for a radix-p stage of block size p*s (p in 2, 3, 4,
-// 8): writes s records of ahn_tan_nscal(p) doubles; returns 0, or -1 for other p.
-int ahn_tan_table(uint32_t p, uint32_t s, double *out);
-uint32_t ahn_tan_nscal(uint32_t p);
+// 8): writes s records of kite_tan_nscal(p) doubles; returns 0, or -1 for other p.
+int kite_tan_table(uint32_t p, uint32_t s, double *out);
+uint32_t kite_tan_nscal(uint32_t p);
 
-void *ahn_alloc(size_t bytes);
-void ahn_free_aligned(void *p);
+void *kite_alloc(size_t bytes);
+void kite_free_aligned(void *p);
 
 #endif

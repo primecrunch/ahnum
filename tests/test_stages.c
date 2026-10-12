@@ -72,15 +72,15 @@ int main(void) {
         stage_fn f[2][2];  // [dit][notw]
         t4_fn t4[2];
     } taba[] = {
-        {2, {{ahn_dif_r2, ahn_dif_r2_notw}, {ahn_dit_r2, ahn_dit_r2_notw}}, {ahn_dif_r2_t4, ahn_dit_r2_t4}},
-        {3, {{ahn_dif_r3, ahn_dif_r3_notw}, {ahn_dit_r3, ahn_dit_r3_notw}}, {ahn_dif_r3_t4, ahn_dit_r3_t4}},
-        {4, {{ahn_dif_r4, ahn_dif_r4_notw}, {ahn_dit_r4, ahn_dit_r4_notw}}, {ahn_dif_r4_t4, ahn_dit_r4_t4}},
-        {5, {{ahn_dif_r5, ahn_dif_r5_notw}, {ahn_dit_r5, ahn_dit_r5_notw}}, {ahn_dif_r5_t4, ahn_dit_r5_t4}},
-        {7, {{ahn_dif_r7, ahn_dif_r7_notw}, {ahn_dit_r7, ahn_dit_r7_notw}}, {ahn_dif_r7_t4, ahn_dit_r7_t4}},
-        {8, {{ahn_dif_r8, ahn_dif_r8_notw}, {ahn_dit_r8, ahn_dit_r8_notw}}, {ahn_dif_r8_t4, ahn_dit_r8_t4}},
+        {2, {{kite_dif_r2, kite_dif_r2_notw}, {kite_dit_r2, kite_dit_r2_notw}}, {kite_dif_r2_t4, kite_dit_r2_t4}},
+        {3, {{kite_dif_r3, kite_dif_r3_notw}, {kite_dit_r3, kite_dit_r3_notw}}, {kite_dif_r3_t4, kite_dit_r3_t4}},
+        {4, {{kite_dif_r4, kite_dif_r4_notw}, {kite_dit_r4, kite_dit_r4_notw}}, {kite_dif_r4_t4, kite_dit_r4_t4}},
+        {5, {{kite_dif_r5, kite_dif_r5_notw}, {kite_dit_r5, kite_dit_r5_notw}}, {kite_dif_r5_t4, kite_dit_r5_t4}},
+        {7, {{kite_dif_r7, kite_dif_r7_notw}, {kite_dit_r7, kite_dit_r7_notw}}, {kite_dif_r7_t4, kite_dit_r7_t4}},
+        {8, {{kite_dif_r8, kite_dif_r8_notw}, {kite_dit_r8, kite_dit_r8_notw}}, {kite_dif_r8_t4, kite_dit_r8_t4}},
     }, tabb[] = {
-#define ROW(P) {P, {{ahn_dif_r##P##_b, ahn_dif_r##P##_notw_b}, {ahn_dit_r##P##_b, ahn_dit_r##P##_notw_b}}, \
-                {ahn_dif_r##P##_t4_b, ahn_dit_r##P##_t4_b}}
+#define ROW(P) {P, {{kite_dif_r##P##_b, kite_dif_r##P##_notw_b}, {kite_dit_r##P##_b, kite_dit_r##P##_notw_b}}, \
+                {kite_dif_r##P##_t4_b, kite_dit_r##P##_t4_b}}
         ROW(2), ROW(3), ROW(4), ROW(5), ROW(7), ROW(8),
 #undef ROW
     };
@@ -134,10 +134,10 @@ int main(void) {
     static const struct {
         int p;
         stage_fn f[2];
-    } tant[] = {{2, {ahn_dit_r2_tan, ahn_dit_r2_tan_b}},
-                {3, {ahn_dit_r3_tan, ahn_dit_r3_tan_b}},
-                {4, {ahn_dit_r4_tan, ahn_dit_r4_tan_b}},
-                {8, {ahn_dit_r8_tan, ahn_dit_r8_tan_b}}};
+    } tant[] = {{2, {kite_dit_r2_tan, kite_dit_r2_tan_b}},
+                {3, {kite_dit_r3_tan, kite_dit_r3_tan_b}},
+                {4, {kite_dit_r4_tan, kite_dit_r4_tan_b}},
+                {8, {kite_dit_r8_tan, kite_dit_r8_tan_b}}};
     static const size_t tans[] = {5, 8, 16};
     for (int layout = 0; layout < 2; layout++) {
         g_imoff = layout ? 8 : 2;
@@ -159,8 +159,8 @@ int main(void) {
                         tw[2 * (j * (p - 1) + t - 1) + 1] = -__sinpi(ang);
                     }
                 }
-                double *tt = malloc(s * ahn_tan_nscal(p) * sizeof(double));
-                ahn_tan_table(p, s, tt);
+                double *tt = malloc(s * kite_tan_nscal(p) * sizeof(double));
+                kite_tan_table(p, s, tt);
                 tant[i].f[layout](a, es, nlg, nb, bs, s, tt);
                 ref_stage(b, p, 1, 0, es, nlg, nb, bs, s, tw, 0);
                 double maxd = 0;
@@ -216,7 +216,7 @@ int main(void) {
                     }
                 }
             }
-            ahn_sme_r8(a, es, nb, bs, s, mats);
+            kite_sme_r8(a, es, nb, bs, s, mats);
             ref_stage(b, 8, dit, 0, es, nlg, nb, bs, s, tw, 0);
             double maxd = 0;
             for (size_t k = 0; k < bytes / 8; k++) maxd = fmax(maxd, fabs(a[k] - b[k]));

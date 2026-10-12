@@ -5,16 +5,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-void *ahn_alloc(size_t bytes) {
+void *kite_alloc(size_t bytes) {
     void *p = NULL;
     if (posix_memalign(&p, 128, bytes ? bytes : 128)) return NULL;
     memset(p, 0, bytes);
     return p;
 }
 
-void ahn_free_aligned(void *p) { free(p); }
+void kite_free_aligned(void *p) { free(p); }
 
-bool ahn_fft_len_ok(uint32_t L) {
+bool kite_fft_len_ok(uint32_t L) {
     if (L < 16 || (L & 1)) return false;
     while (L % 2 == 0) L /= 2;
     while (L % 3 == 0) L /= 3;
@@ -28,13 +28,13 @@ bool ahn_fft_len_ok(uint32_t L) {
 //   21.44 - 0.305*(log2 L - 12) - 0.50*log2 k
 // less a margin so that the max error over a full test stays below 0.4.
 #define BPW_MARGIN 0.2
-double ahn_safe_bpw(uint32_t L, uint64_t k) {
+double kite_safe_bpw(uint32_t L, uint64_t k) {
     return 21.44 - 0.305 * (log2((double)L) - 12) - 0.50 * log2((double)k) - BPW_MARGIN;
 }
 
 // Measured squaring times (us) per FFT length, loaded from a tuning file with
-// lines "L us [order]" (see `ahbench tune`; order as ahn_opts.plan_order bits,
-// 0 if absent). Path: $AHN_FFT_TIMES, else ~/.ahnum/fft_times.txt.
+// lines "L us [order]" (see `kite tune`; order as kite_opts.plan_order bits,
+// 0 if absent). Path: $KITE_FFT_TIMES, else ~/.kite/fft_times.txt.
 static struct {
     int loaded;
     uint32_t n;
@@ -47,11 +47,11 @@ static void load_times(void) {
     if (g_times.loaded) return;
     g_times.loaded = 1;
     char path[1024];
-    const char *p = getenv("AHN_FFT_TIMES");
+    const char *p = getenv("KITE_FFT_TIMES");
     if (!p) {
         const char *home = getenv("HOME");
         if (!home) return;
-        snprintf(path, sizeof path, "%s/.ahnum/fft_times.txt", home);
+        snprintf(path, sizeof path, "%s/.kite/fft_times.txt", home);
         p = path;
     }
     FILE *f = fopen(p, "r");
@@ -76,7 +76,7 @@ static void load_times(void) {
     fclose(f);
 }
 
-uint32_t ahn_tuned_plan_order(uint32_t L) {
+uint32_t kite_tuned_plan_order(uint32_t L) {
     load_times();
     for (uint32_t i = 0; i < g_times.n; i++) {
         if (g_times.L[i] == L) return g_times.ord[i];
@@ -102,19 +102,19 @@ static double cost_model(uint32_t L) {
     return (double)L * c;
 }
 
-static bool len_usable(uint32_t L) { return L % 64 == 0 && ahn_fft_len_ok(L); }
+static bool len_usable(uint32_t L) { return L % 64 == 0 && kite_fft_len_ok(L); }
 
-uint32_t ahn_choose_fft_len(uint64_t k, uint64_t n) {
+uint32_t kite_choose_fft_len(uint64_t k, uint64_t n) {
     if (n < 2048) {
         // tiny numbers (reference backend): short power-of-two lengths
         for (uint32_t L = 16; L <= n; L *= 2) {
-            if ((double)n / L <= ahn_safe_bpw(L, k)) return L;
+            if ((double)n / L <= kite_safe_bpw(L, k)) return L;
         }
         return 0;
     }
     uint32_t Lmin = 0;
     for (uint32_t L = 64; L && L < (1u << 28); L += 64) {
-        if (len_usable(L) && (double)n / L <= ahn_safe_bpw(L, k)) {
+        if (len_usable(L) && (double)n / L <= kite_safe_bpw(L, k)) {
             Lmin = L;
             break;
         }
@@ -140,9 +140,9 @@ uint32_t ahn_choose_fft_len(uint64_t k, uint64_t n) {
     return best;
 }
 
-uint32_t ahn_next_fft_len(uint32_t L) {
+uint32_t kite_next_fft_len(uint32_t L) {
     for (uint32_t M = (L / 64 + 1) * 64; M && M < (1u << 28); M += 64) {
-        if (ahn_fft_len_ok(M)) return M;
+        if (kite_fft_len_ok(M)) return M;
     }
     return 0;
 }
@@ -169,7 +169,7 @@ static uint64_t log2_frac64(uint64_t k) {
 // T' = n + floor(log2 k) + frac/2^64. Everything (digit boundaries and weights)
 // is defined from T' with exact integer arithmetic; z^L = 2^T' differs from
 // k*2^n by a relative 2^-64, which is below double precision.
-uint64_t ahn_s_at(const ahn_ctx *ctx, uint64_t j) {
+uint64_t kite_s_at(const kite_ctx *ctx, uint64_t j) {
     // s_j = ceil(j*T'/L), T'*2^64 = (n + ilog2k)*2^64 + lam
     unsigned __int128 num = (unsigned __int128)j * ctx->lam;
     unsigned __int128 den = (unsigned __int128)ctx->L << 64;
@@ -183,7 +183,7 @@ uint64_t ahn_s_at(const ahn_ctx *ctx, uint64_t j) {
 }
 
 // w_j = 2^{s_j - j*T'/L}; the exponent is an exact ratio of integers.
-double ahn_weight(const ahn_ctx *ctx, uint64_t j, uint64_t sj) {
+double kite_weight(const kite_ctx *ctx, uint64_t j, uint64_t sj) {
     uint64_t ik = (uint64_t)(63 - __builtin_clzll(ctx->k));
     unsigned __int128 whole = (unsigned __int128)j * (ctx->n + ik);
     unsigned __int128 qa = whole / ctx->L, ra = whole % ctx->L;
@@ -195,21 +195,21 @@ double ahn_weight(const ahn_ctx *ctx, uint64_t j, uint64_t sj) {
     return exp2(frac);
 }
 
-static int build_layout(ahn_ctx *ctx) {
+static int build_layout(kite_ctx *ctx) {
     uint32_t L = ctx->L;
     uint64_t n = ctx->n, k = ctx->k;
     ctx->lam = log2_frac64(k);
     uint64_t s = 0;
     ctx->top_t = L;
     for (uint32_t j = 0; j < L; j++) {
-        uint64_t s_next = ahn_s_at(ctx, j + 1);
+        uint64_t s_next = kite_s_at(ctx, j + 1);
         if (s_next < s || s_next - s > 40) return -1;
         ctx->bits[j] = (uint8_t)(s_next - s);
         if (s_next > n && ctx->top_t == L) {
             ctx->top_t = j;
             ctx->top_st = s;
         }
-        ctx->w[j] = ahn_weight(ctx, j, s);
+        ctx->w[j] = kite_weight(ctx, j, s);
         ctx->oscale[j] = (double)k / ctx->w[j];
         s = s_next;
     }
@@ -220,24 +220,24 @@ static int build_layout(ahn_ctx *ctx) {
     return 0;
 }
 
-ahn_ctx *ahn_ctx_new(uint64_t k, uint64_t n, int32_t c, const ahn_opts *o) {
+kite_ctx *kite_ctx_new(uint64_t k, uint64_t n, int32_t c, const kite_opts *o) {
     if (c != -1 || k == 0 || (k & 1) == 0 || n < 8) return NULL;
     if (k >= (1ull << 30)) return NULL;
-    ahn_ctx *ctx = calloc(1, sizeof *ctx);
+    kite_ctx *ctx = calloc(1, sizeof *ctx);
     if (!ctx) return NULL;
     ctx->k = k;
     ctx->n = n;
     ctx->c = c;
-    ctx->L = o && o->fft_len ? o->fft_len : ahn_choose_fft_len(k, n);
+    ctx->L = o && o->fft_len ? o->fft_len : kite_choose_fft_len(k, n);
     ctx->threads = o && o->threads ? o->threads : 1;
-    ctx->plan_order = o && o->plan_order ? (o->plan_order - 1) & 3 : ahn_tuned_plan_order(ctx->L);
+    ctx->plan_order = o && o->plan_order ? (o->plan_order - 1) & 3 : kite_tuned_plan_order(ctx->L);
     ctx->err_every = 1;
-    if (!ahn_fft_len_ok(ctx->L) || ctx->L > n) goto fail;
+    if (!kite_fft_len_ok(ctx->L) || ctx->L > n) goto fail;
 
     ctx->bits = malloc(ctx->L);
-    ctx->w = ahn_alloc(ctx->L * sizeof(double));
-    ctx->oscale = ahn_alloc(ctx->L * sizeof(double));
-    ctx->tmpdig = ahn_alloc(ctx->L * sizeof(int64_t));
+    ctx->w = kite_alloc(ctx->L * sizeof(double));
+    ctx->oscale = kite_alloc(ctx->L * sizeof(double));
+    ctx->tmpdig = kite_alloc(ctx->L * sizeof(int64_t));
     ctx->nlimbs = (n + 64 + 63) / 64;
     ctx->Nlimbs = calloc(ctx->nlimbs, sizeof(uint64_t));
     if (!ctx->bits || !ctx->w || !ctx->oscale || !ctx->tmpdig || !ctx->Nlimbs) goto fail;
@@ -253,59 +253,59 @@ ahn_ctx *ahn_ctx_new(uint64_t k, uint64_t n, int32_t c, const ahn_opts *o) {
         }
     }
 
-    ahn_backend b = o ? o->backend : AHN_BACKEND_AUTO;
+    kite_backend b = o ? o->backend : KITE_BACKEND_AUTO;
     switch (b) {
-    case AHN_BACKEND_REF:
-        ctx->ops = &ahn_ref_ops;
+    case KITE_BACKEND_REF:
+        ctx->ops = &kite_ref_ops;
         break;
-    case AHN_BACKEND_AUTO:
-    case AHN_BACKEND_NEON:
-        ctx->ops = &ahn_neon_ops;
+    case KITE_BACKEND_AUTO:
+    case KITE_BACKEND_NEON:
+        ctx->ops = &kite_neon_ops;
         break;
-    case AHN_BACKEND_SME:
-        ctx->ops = &ahn_sme_ops;
+    case KITE_BACKEND_SME:
+        ctx->ops = &kite_sme_ops;
         break;
-    case AHN_BACKEND_C2P:
-        ctx->ops = &ahn_f2_ops;
+    case KITE_BACKEND_C2P:
+        ctx->ops = &kite_f2_ops;
         break;
     default:
         goto fail;
     }
     if (ctx->ops->init(ctx)) {
         // tiny sizes the fast backend cannot shape fall back to the reference
-        if (b != AHN_BACKEND_AUTO || ctx->ops == &ahn_ref_ops) goto fail;
+        if (b != KITE_BACKEND_AUTO || ctx->ops == &kite_ref_ops) goto fail;
         if (ctx->bk) ctx->ops->free(ctx);
-        ctx->ops = &ahn_ref_ops;
+        ctx->ops = &kite_ref_ops;
         if (ctx->ops->init(ctx)) goto fail;
     }
     return ctx;
 fail:
-    ahn_ctx_free(ctx);
+    kite_ctx_free(ctx);
     return NULL;
 }
 
-void ahn_ctx_free(ahn_ctx *ctx) {
+void kite_ctx_free(kite_ctx *ctx) {
     if (!ctx) return;
     if (ctx->ops && ctx->bk) ctx->ops->free(ctx);
     free(ctx->bits);
-    ahn_free_aligned(ctx->w);
-    ahn_free_aligned(ctx->oscale);
-    ahn_free_aligned(ctx->tmpdig);
+    kite_free_aligned(ctx->w);
+    kite_free_aligned(ctx->oscale);
+    kite_free_aligned(ctx->tmpdig);
     free(ctx->Nlimbs);
     free(ctx);
 }
 
-uint32_t ahn_fft_len(const ahn_ctx *ctx) { return ctx->L; }
-const char *ahn_backend_name(const ahn_ctx *ctx) { return ctx->ops->name; }
-double ahn_max_roundoff(const ahn_ctx *ctx) { return ctx->maxerr; }
-void ahn_reset_roundoff(ahn_ctx *ctx) { ctx->maxerr = 0; }
-void ahn_set_roundoff_check(ahn_ctx *ctx, uint32_t every) { ctx->err_every = every ? every : 1; }
-size_t ahn_limbs(const ahn_ctx *ctx) { return ctx->nlimbs; }
+uint32_t kite_fft_len(const kite_ctx *ctx) { return ctx->L; }
+const char *kite_backend_name(const kite_ctx *ctx) { return ctx->ops->name; }
+double kite_max_roundoff(const kite_ctx *ctx) { return ctx->maxerr; }
+void kite_reset_roundoff(kite_ctx *ctx) { ctx->maxerr = 0; }
+void kite_set_roundoff_check(kite_ctx *ctx, uint32_t every) { ctx->err_every = every ? every : 1; }
+size_t kite_limbs(const kite_ctx *ctx) { return ctx->nlimbs; }
 
-ahn_num *ahn_num_new(ahn_ctx *ctx) {
-    ahn_num *x = malloc(sizeof *x);
+kite_num *kite_num_new(kite_ctx *ctx) {
+    kite_num *x = malloc(sizeof *x);
     if (!x) return NULL;
-    x->d = ahn_alloc(ctx->num_doubles * sizeof(double));
+    x->d = kite_alloc(ctx->num_doubles * sizeof(double));
     if (!x->d) {
         free(x);
         return NULL;
@@ -313,30 +313,30 @@ ahn_num *ahn_num_new(ahn_ctx *ctx) {
     return x;
 }
 
-void ahn_num_free(ahn_ctx *ctx, ahn_num *x) {
+void kite_num_free(kite_ctx *ctx, kite_num *x) {
     (void)ctx;
     if (!x) return;
-    ahn_free_aligned(x->d);
+    kite_free_aligned(x->d);
     free(x);
 }
 
-void ahn_copy(ahn_ctx *ctx, ahn_num *dst, const ahn_num *src) {
+void kite_copy(kite_ctx *ctx, kite_num *dst, const kite_num *src) {
     memcpy(dst->d, src->d, ctx->num_doubles * sizeof(double));
 }
 
-void ahn_square(ahn_ctx *ctx, ahn_num *x) { ctx->ops->square(ctx, x); }
+void kite_square(kite_ctx *ctx, kite_num *x) { ctx->ops->square(ctx, x); }
 
-void ahn_square_n(ahn_ctx *ctx, ahn_num *x, uint64_t count) {
+void kite_square_n(kite_ctx *ctx, kite_num *x, uint64_t count) {
     for (uint64_t i = 0; i < count; i++) ctx->ops->square(ctx, x);
 }
 
-void ahn_mul(ahn_ctx *ctx, ahn_num *x, const ahn_num *y) { ctx->ops->mul(ctx, x, y); }
-void ahn_mul_small(ahn_ctx *ctx, ahn_num *x, int64_t m) { ctx->ops->mul_small(ctx, x, m); }
+void kite_mul(kite_ctx *ctx, kite_num *x, const kite_num *y) { ctx->ops->mul(ctx, x, y); }
+void kite_mul_small(kite_ctx *ctx, kite_num *x, int64_t m) { ctx->ops->mul_small(ctx, x, m); }
 
 // Fold the top region (digits t..L-1 plus carry c at 2^{s_L}) so that it
 // holds a value in [-k*2^m/2, k*2^m/2) (m = n - s_t); returns the amount to
 // add into digit 0.
-static int64_t fold_top(const ahn_ctx *ctx, int64_t *dig, int64_t c) {
+static int64_t fold_top(const kite_ctx *ctx, int64_t *dig, int64_t c) {
     uint32_t L = ctx->L, t = ctx->top_t;
     __int128 H = (__int128)c << (ctx->sL - ctx->top_st);
     uint64_t pos = 0;
@@ -366,7 +366,7 @@ static int64_t fold_top(const ahn_ctx *ctx, int64_t *dig, int64_t c) {
 }
 
 // Balanced-digit carry propagation with the top fold.
-void ahn_carry_digits(const ahn_ctx *ctx, int64_t *dig) {
+void kite_carry_digits(const kite_ctx *ctx, int64_t *dig) {
     uint32_t L = ctx->L;
     int64_t carry = 0;
     for (uint32_t j = 0; j < L; j++) {
@@ -444,7 +444,7 @@ static uint64_t limbs_get_bits(const uint64_t *a, size_t na, uint64_t pos, unsig
 
 // a = (a mod 2^n) + q + r*2^n where a>>n = q*k + r; then reduce below N.
 // Requires a>>n < 2^120; uses k*2^n == 1 (mod N).
-static void reduce_mod_N(const ahn_ctx *ctx, uint64_t *a, size_t na) {
+static void reduce_mod_N(const kite_ctx *ctx, uint64_t *a, size_t na) {
     uint64_t n = ctx->n, k = ctx->k;
     for (int pass = 0; pass < 4; pass++) {
         size_t w = n / 64;
@@ -466,7 +466,7 @@ static void reduce_mod_N(const ahn_ctx *ctx, uint64_t *a, size_t na) {
 }
 
 // k * (sum of the positive or negative digits) mod N, into a (na limbs).
-static void signed_part_mod_N(const ahn_ctx *ctx, const int64_t *dig, int sign, uint64_t *a,
+static void signed_part_mod_N(const kite_ctx *ctx, const int64_t *dig, int sign, uint64_t *a,
                               size_t na) {
     memset(a, 0, na * sizeof(uint64_t));
     uint64_t s = 0;
@@ -485,7 +485,7 @@ static void signed_part_mod_N(const ahn_ctx *ctx, const int64_t *dig, int sign, 
     reduce_mod_N(ctx, a, na);
 }
 
-void ahn_get_limbs(ahn_ctx *ctx, const ahn_num *x, uint64_t *limbs) {
+void kite_get_limbs(kite_ctx *ctx, const kite_num *x, uint64_t *limbs) {
     int64_t *dig = ctx->tmpdig;
     ctx->ops->to_digits(ctx, x, dig);
     size_t na = (ctx->sL + 64) / 64 + 2;
@@ -507,7 +507,7 @@ void ahn_get_limbs(ahn_ctx *ctx, const ahn_num *x, uint64_t *limbs) {
     free(m);
 }
 
-void ahn_set_limbs(ahn_ctx *ctx, ahn_num *x, const uint64_t *limbs) {
+void kite_set_limbs(kite_ctx *ctx, kite_num *x, const uint64_t *limbs) {
     size_t nl = ctx->nlimbs + 1;
     uint64_t *a = calloc(nl, sizeof(uint64_t));
     memcpy(a, limbs, ctx->nlimbs * sizeof(uint64_t));
@@ -530,20 +530,20 @@ void ahn_set_limbs(ahn_ctx *ctx, ahn_num *x, const uint64_t *limbs) {
     }
     dig[ctx->L - 1] = (int64_t)limbs_get_bits(a, nl, s, 64);  // < 2^{s_L - s_{L-1}}
     free(a);
-    ahn_carry_digits(ctx, dig);
+    kite_carry_digits(ctx, dig);
     ctx->ops->from_digits(ctx, x, dig);
 }
 
-void ahn_set_u64(ahn_ctx *ctx, ahn_num *x, uint64_t v) {
+void kite_set_u64(kite_ctx *ctx, kite_num *x, uint64_t v) {
     uint64_t *t = calloc(ctx->nlimbs, sizeof(uint64_t));
     t[0] = v;
-    ahn_set_limbs(ctx, x, t);
+    kite_set_limbs(ctx, x, t);
     free(t);
 }
 
-uint64_t ahn_res64(ahn_ctx *ctx, const ahn_num *x) {
+uint64_t kite_res64(kite_ctx *ctx, const kite_num *x) {
     uint64_t *t = malloc(ctx->nlimbs * sizeof(uint64_t));
-    ahn_get_limbs(ctx, x, t);
+    kite_get_limbs(ctx, x, t);
     uint64_t r = t[0];
     free(t);
     return r;

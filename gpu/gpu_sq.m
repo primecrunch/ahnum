@@ -1,16 +1,16 @@
 // Prototype benchmark: full squarings mod N = k * 2^n - 1 on the GPU, B numbers
 // at once (see gpu_ctx.h / sq.metal for the steps). Numbers are in Montgomery
 // form, so each step is x -> x^2 * 2^-n = x^2 k (mod N); the check runs the
-// same recurrence on the CPU with ahnum.
+// same recurrence on the CPU with kite.
 //
-// build: clang -O2 -fobjc-arc -Iinclude gpu/gpu_sq.m build/libahnum.a \
+// build: clang -O2 -fobjc-arc -Iinclude gpu/gpu_sq.m build/libkite.a \
 //            -framework Metal -framework Foundation -o build/gpu_sq
 // usage: build/gpu_sq K N [B] [squarings]   (run from the repo root)
-//   AHN_GPU_SECS=S          keep squaring for S seconds (runs alongside CPU load)
-//   AHN_GPU_FORCE_RIPPLE=1  test mode: every carry goes through the sequential fix-up
+//   KITE_GPU_SECS=S          keep squaring for S seconds (runs alongside CPU load)
+//   KITE_GPU_FORCE_RIPPLE=1  test mode: every carry goes through the sequential fix-up
 #include "gpu_ctx.h"
 
-#include "ahnum.h"
+#include "kite.h"
 
 int main(int argc, char **argv) {
     @autoreleasepool {
@@ -21,15 +21,15 @@ int main(int argc, char **argv) {
         uint64_t k = strtoull(argv[1], 0, 10), n = strtoull(argv[2], 0, 10);
         uint32_t B = argc > 3 ? (uint32_t)atoi(argv[3]) : 64;
         uint32_t sq = argc > 4 ? (uint32_t)atoi(argv[4]) : 20;
-        int force = getenv("AHN_GPU_FORCE_RIPPLE") != NULL;
+        int force = getenv("KITE_GPU_FORCE_RIPPLE") != NULL;
         gctx g;
         if (gctx_init(&g, k, n, B, force)) return 1;
         printf("k=%llu n=%llu: W=%u words of 45 bits, NP=%u (R=%u C=%u), B=%u%s\n",
                (unsigned long long)k, (unsigned long long)n, g.W, g.NP, g.R, g.C, B,
                force ? ", forced ripple" : "");
 
-        ahn_ctx *ctx = ahn_ctx_new(k, n, -1, NULL);
-        size_t nl = ahn_limbs(ctx);
+        kite_ctx *ctx = kite_ctx_new(k, n, -1, NULL);
+        size_t nl = kite_limbs(ctx);
         uint64_t *x0 = calloc(nl, 8), *Nl = calloc(nl + 2, 8), *got = calloc(nl + 2, 8),
                  *want = calloc(nl, 8);
         g_make_n(Nl, nl + 2, k, n);
@@ -48,13 +48,13 @@ int main(int argc, char **argv) {
                 for (uint32_t s = 0; s < sq; s++) gctx_sqr(gp, e, bX);
             }))
             return 1;
-        ahn_num *cx = ahn_num_new(ctx);
-        ahn_set_limbs(ctx, cx, x0);
+        kite_num *cx = kite_num_new(ctx);
+        kite_set_limbs(ctx, cx, x0);
         for (uint32_t s = 0; s < sq; s++) {
-            ahn_square(ctx, cx);
-            ahn_mul_small(ctx, cx, (int64_t)k);
+            kite_square(ctx, cx);
+            kite_mul_small(ctx, cx, (int64_t)k);
         }
-        ahn_get_limbs(ctx, cx, want);
+        kite_get_limbs(ctx, cx, want);
         int bad = 0;
         uint32_t slots[2] = {0, B - 1};
         for (int si = 0; si < 2; si++) {
@@ -65,7 +65,7 @@ int main(int argc, char **argv) {
         printf("%u squarings: %s\n", sq, bad ? "MISMATCH" : "match");
         if (bad) return 1;
 
-        const char *secs_env = getenv("AHN_GPU_SECS");
+        const char *secs_env = getenv("KITE_GPU_SECS");
         if (secs_env) {
             double secs = atof(secs_env);
             uint64_t done = 0;

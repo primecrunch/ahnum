@@ -17,7 +17,7 @@ static const uint8_t S[64] = {7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12
                               4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
                               6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21};
 
-static void block(ahn_md5 *m, const uint8_t *p) {
+static void block(kite_md5 *m, const uint8_t *p) {
     uint32_t w[16];
     for (int i = 0; i < 16; i++)
         w[i] = p[4 * i] | p[4 * i + 1] << 8 | p[4 * i + 2] << 16 | (uint32_t)p[4 * i + 3] << 24;
@@ -50,7 +50,7 @@ static void block(ahn_md5 *m, const uint8_t *p) {
     m->d += d;
 }
 
-void ahn_md5_init(ahn_md5 *m) {
+void kite_md5_init(kite_md5 *m) {
     m->a = 0x67452301;
     m->b = 0xefcdab89;
     m->c = 0x98badcfe;
@@ -58,7 +58,7 @@ void ahn_md5_init(ahn_md5 *m) {
     m->len = 0;
 }
 
-void ahn_md5_update(ahn_md5 *m, const void *data, size_t len) {
+void kite_md5_update(kite_md5 *m, const void *data, size_t len) {
     const uint8_t *p = data;
     size_t have = m->len & 63;
     m->len += len;
@@ -74,23 +74,23 @@ void ahn_md5_update(ahn_md5 *m, const void *data, size_t len) {
     memcpy(m->buf, p, len);
 }
 
-void ahn_md5_final(ahn_md5 *m, uint8_t out[16]) {
+void kite_md5_final(kite_md5 *m, uint8_t out[16]) {
     uint64_t bits = m->len * 8;
     uint8_t pad[72] = {0x80};
     size_t have = m->len & 63, n = (have < 56 ? 56 : 120) - have;
-    ahn_md5_update(m, pad, n);
+    kite_md5_update(m, pad, n);
     for (int i = 0; i < 8; i++) pad[i] = (uint8_t)(bits >> (8 * i));
-    ahn_md5_update(m, pad, 8);
+    kite_md5_update(m, pad, 8);
     uint32_t r[4] = {m->a, m->b, m->c, m->d};
     for (int i = 0; i < 16; i++) out[i] = (uint8_t)(r[i / 4] >> (8 * (i % 4)));
 }
 
-void ahn_md5_hex(const void *data, size_t len, char out[33]) {
-    ahn_md5 m;
+void kite_md5_hex(const void *data, size_t len, char out[33]) {
+    kite_md5 m;
     uint8_t d[16];
-    ahn_md5_init(&m);
-    ahn_md5_update(&m, data, len);
-    ahn_md5_final(&m, d);
+    kite_md5_init(&m);
+    kite_md5_update(&m, data, len);
+    kite_md5_final(&m, d);
     for (int i = 0; i < 16; i++) {
         out[2 * i] = "0123456789abcdef"[d[i] >> 4];
         out[2 * i + 1] = "0123456789abcdef"[d[i] & 15];
