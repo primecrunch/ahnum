@@ -40,6 +40,12 @@ Below the bar on its own:
   (~1.7%) at 49152 even at the full FP rate. It is bound by loading the rows, not by FP:
   dropping its twiddle multiplies (56 → 32 ops) did not change its time.
 
+## Beyond the squaring
+
+- **PRST-compatible proof certificates: done** (`ahprst`, `docs/prst-compat.md`). Not a
+  speed-up; it lets ahnum take work that needs PRST certificates. Its speed against PRST on
+  14 single-thread proof tests is still to measure.
+
 ## On hold
 
 - **GPU squaring alongside the CPU tests (prototype in `gpu/`).** `gpu/gpu_prp.m` runs complete

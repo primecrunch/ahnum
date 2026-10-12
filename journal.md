@@ -1136,7 +1136,7 @@ CPU alone sustains. Sustained throughput: CPU side 13 × 3600 / ~550 s ≈ 85 te
 ≈ **244 tests/hour**, against ~372 for the CPU alone and 173 for the GPU alone. Running both is
 a 35% loss here. The +22% from 30 s samples measured the first minute, before the cap.
 
-## 2026-10-12 12:15 — Decision: CPU only for now
+## 2026-10-12 13:25 — Decision: CPU only for now
 
 The GPU path goes on hold. On a laptop macOS gives the power budget to the GPU and the CPU
 loses more than the GPU adds, so it would only pay on desktops, and that makes it lower
@@ -1145,7 +1145,7 @@ README now gives complete-test figures for the GPU rows, labels the speed histor
 one-round (~2 minute) figures, and adds the sustained 14-test number (~372 tests/hour); the
 priorities file moves the GPU item to an "On hold" section with these measurements.
 
-## 2026-10-12 12:40 — Next CPU candidates
+## 2026-10-12 19:40 — Next CPU candidates
 
 With the GPU on hold, the candidate list had one item left, below the bar (pass-2 rows in,
 ~1.7%). Today's runs change what to rank against: the workload is 14 tests sustained on a
@@ -1194,7 +1194,7 @@ On reflection the cache-footprint item goes to the bottom of the list: the under
 is the evidence against it. Next is the pass-1 inverse stages, the largest phase (18.6% under
 load) and at ~80% of the FP limit against 95% for the forward stages of the same pass.
 
-## 2026-10-12 21:05 — Pass-1 inverse stages: the gap is the group load
+## 2026-10-12 21:03 — Pass-1 inverse stages: the gap is the group load
 
 The inverse stages are the first to touch each pass-1 group after pass 2, so their first stage
 loads the group's 12 KB (96 rows × 128 B, 4224-byte stride) from L2; the forward stages run on
@@ -1213,7 +1213,7 @@ already hide part of it. The ceiling is 2.1 µs (1.8%) even if the load were fre
 bar. Dropped; the patch is in `docs/experiments/p1-touch-before-inverse.patch`. The "80% of the
 FP limit" figure was this load, not slow kernels. The normaliser is next.
 
-## 2026-10-12 21:25 — Normaliser: at the FP limit on hot data
+## 2026-10-12 21:06 — Normaliser: at the FP limit on hot data
 
 The priorities file said the normaliser was still tied to its carry-chain latency. Counting
 `ahn_norm_ao`'s loop (`tools/count_ops.py`): 576 vector ops per 128 digits (448 FP + 128
@@ -1237,7 +1237,7 @@ That leaves one candidate on the list with a ceiling near 3%: radix-16 stages to
 Two of the three items ranked above it today turned out to be memory loads already measured,
 not slow code.
 
-## 2026-10-12 21:40 — Radix-16: counted, no saving
+## 2026-10-12 21:12 — Radix-16: counted, no saving
 
 Op counts of the generated kernels (`tools/count_ops.py`), vector ops per butterfly: radix-8
 no-twiddle 56, tangent 66; radix-4 no-twiddle 16, tangent 22. One complex value per register,
@@ -1256,3 +1256,105 @@ cache footprint (tables), pass-2 rows in (~1.7%), and the pass-1 group load (1.8
 separate read costs more than it saves). The kernels run at 80–95% of the FP limit and the
 rest is L2 traffic that is cheap under load. The next gains need either a lower bar with
 several 1–2% items stacked, or a change at the algorithm level.
+
+## 2026-10-12 21:25 — Literature check: the k penalty, proofs, error bounds
+
+With the kernel list empty, a search for techniques at the algorithm level.
+
+**The k penalty is inherent to the IBDWT for k·2^n±1.** Percival (Math. Comp. 72 (2003),
+387–395, "Rapid multiplication modulo the sum and difference of highly composite numbers") is
+the source of the method ahnum uses. Its worst-case bound for k·2^m ± 1 has
+|ax| < sqrt((k·2^m)^(1/N) · 3(k² − 1)/(2 log k² log 4)): the weighted digits grow with k, so
+the error grows with k and the usable word size shrinks by about ½·log2 k bits, which is what
+ahnum's fitted 0.525·log2 k shows. The paper's own example: an FFT of 2^18 suffices up to m = 6M
+for k = 3 but only 3M for k = 557. Nothing found removes it within the IBDWT. The known
+alternative avoids the k-weighting by computing the full product with a Mersenne-style
+transform (no k term, ~20.4 bits per word here) and reducing with x·2^n ≡ x/k, i.e.
+x² = H·2^n + L ⇒ x²·2^−n ≡ H + k·L. That needs about 2(n + log2 k) bits of transform against
+n bits at 20.4 − 0.525·log2 k, so it wins only above log2 k ≈ 19–20. That matches what LLR-family
+software does: an alternative LLR implementation on mersenneforum uses zero-padded FFTs for k of
+22–45 bits and generic reduction beyond. At k = 9001 (13 bits) the IBDWT stays the faster choice.
+
+**Proofs instead of double-checks.** Li and Gallot (arXiv:2209.15623, "An Efficient Modular
+Exponentiation Proof Scheme") generalise the Gerbicz–Pietrzak proof from power-of-two exponents
+to any modular exponentiation, so it covers a Fermat PRP of k·2^n − 1 (exponent N − 1). They
+report negligible prover overhead and that at PrimeGrid it doubled the efficiency of the
+distributed searches, by replacing full double-checks with certificate checks. PRST implements
+proof generation and certificate verification; LLR2 is archived in its favour. This does not
+speed up a squaring. For a search that double-checks its results, a proof-producing ahnum would
+roughly double useful output per machine; for one that already uses PRST's certificates, ahnum
+needs to produce certificates PRST accepts before it can take that work.
+
+**Error bounds.** Percival's proven bounds are worst-case; his measurements put random-input
+errors 1.6–8.7 bits below the "unlucky" inputs as N grows from 2^4 to 2^18. GIMPS and gwnum, like
+ahnum, choose word sizes from measured errors on real inputs and rely on Gerbicz checks and
+retries to catch the rare bad case. The searches found nothing newer that would justify more
+bits per word.
+
+Sources: Percival 2003 (ams.org/mcom/2003-72-241/S0025-5718-02-01419-9, PDF at
+daemonology.net/papers/fft.pdf); Li & Gallot, arXiv:2209.15623; github.com/patnashev/llr2
+(archived, replaced by PRST); mersenneforum "Alternative LLR tester implementation"
+(showthread.php?t=25343).
+
+## 2026-10-12 21:29 — Decision: a PRST-compatible CLI with proofs
+
+Goal: ahnum as a drop-in for prst for Fermat tests of k·2^n − 1 with proofs. The slice of
+PRST needed: the Fermat test (`EXPR -d -fermat a 3 [-t T]`), `-proof save 512` / `build 512`
+/ `cert FILE`, `-time progress 5 coarse`, `-fft info`, `-v`, and SIGTERM checkpointing and
+resume in the working directory; LLR (`EXPR -d`) stays with PRST. For k·2^n − 1 with small k PRST takes its
+"smooth" path, so the proof is plain Pietrzak (points along the n squarings after a^k), not
+Gerbicz–Li. The algorithm and file formats are small: `src/proof.cpp` (~770 lines) and
+`framework/file.cpp`, with fingerprint N mod 3417905339, magic 0x9f2b3cd4, 32-bit little-endian
+giants and `.md5` sidecar files. Interop is tested against the PRST 14.0.1888 x86 binary
+under Rosetta; the source read is 14.1.1903.
+
+Decisions: the CLI reports its own version, `ahnum a.b.c`, rather than imitating PRST's
+banner; LLR is handed to PRST for now.
+
+## 2026-10-12 21:43 — ahprst: PRST-compatible proofs, byte for byte
+
+`ahprst` (tools/ahprst.c) implements a slice of PRST's command line (docs/prst-compat.md)
+and hands everything else, LLR included, to PRST. The
+proof code (src/prstproof.c, src/md5.c) ports PRST 14.1's src/proof.cpp for the smooth path
+and framework/file.cpp's format.
+
+How it was checked. PRST 14.0.1888 (x86) ran under Rosetta
+to produce reference output: `-proof save 512 keep` leaves all 513 points, so ahnum could
+compute the 9 products and the certificate from PRST's own points and compare files. All
+matched byte for byte on the first run, including the .md5 sidecars. Then `ahn_prp` gained
+a point hook: points are captured as the squaring loop passes them, held until the Gerbicz
+check covering them passes, and dropped on a rollback, so a SIGTERM never leaves an
+unverified point on disk. With it ahprst's own 513 points for 1203·2^90001 − 1 were
+identical to PRST's, and so were its products and certificate (RES64 EC81DC6893506908).
+Across the two programs: PRST verifies ahprst's certificate, PRST builds a certificate from
+ahprst's points, and ahprst verifies PRST's certificate, all giving the same certificate
+RES64. 1203·2^400001 − 1, interrupted with SIGTERM at 25% and resumed, gave a certificate
+identical to PRST's (C17686F5F6B4C2CE) and RES64 ACB155E96C137D61, PRST's value.
+
+Details that took reading the source rather than guessing:
+- File names use N mod 3417905339, but point and product headers carry
+  MD5(fp ‖ "3.n")'s first word, and the certificate header carries the plain fp.
+- The challenge is only the first 64 bits of MD5(fp ‖ Y ‖ product): `hash_giants` writes 16
+  bytes but then reinitialises the giant to 2 words. It is made odd and pushed past prime
+  factors below 1000.
+- PRST does not trial-divide by default; its "divisible by" result comes from the Fermat
+  test when a divides N.
+
+`tests/prst_compat.sh` (ctest `prst_compat`) holds MD5s of PRST's files for
+1203·2^90001 − 1 and checks ahprst against them in 2 s. Still missing then:
+PRST's roots-of-unity check during build (a safety check that changes no output), added
+before the next entry.
+
+## 2026-10-12 22:00 — ahprst at n = 2,000,003: identical certificates
+
+9001·2^2000003 − 1, with `-proof save 512` then `-proof build 512`, 4 threads each. Both programs give RES64
+6B2FB550F09B6CBD and certificate RES64 3B9230016377CE4A; the two .cert files are identical;
+PRST verifies ahprst's certificate and ahprst verifies PRST's. ahprst's build ran the new
+roots-of-unity check.
+
+Save step, start to finish: ahprst 244.7 s, PRST 364.8 s (1.49×). Not a benchmark: the
+machine was not checked for quiet, and PRST runs x86 SSE2 code under Rosetta at 4 threads.
+PRST's own "time per op" during a proof save read 0.42 ms against ahprst's 0.12, but PRST's
+figure during `-proof save` is not comparable with its plain test, so only wall time
+compares. The figure that matters is 14 single-thread proof tests side by side, still to
+measure.
