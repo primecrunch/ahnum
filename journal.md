@@ -1378,3 +1378,13 @@ No M1–M3 is available locally (the other Macs are Intel, where ahprst cannot r
 stays), so `.github/workflows/ci.yml` builds and runs `ctest -LE long` on GitHub's Apple
 Silicon runners: macos-14 and macos-15, both M1. That covers an older chip and older macOS
 for correctness; the runners are virtualised, so no timings.
+
+## 2026-10-12 22:15 — CI on M1: one test assumed SME
+
+First CI run: on both M1 runners 10 of 11 tests passed, including prst_compat, the known
+residues and the GMP checks of the NEON backend; `asm_stages` died with an illegal
+instruction. It ran the SME radix-8 kernel unconditionally, and an M1 has no SME. ahnum's
+own SME backend already checks `hw.optional.arm.FEAT_SME_F64F64`; the test now does the same
+and skips that part. Second run: all 11 tests pass on macOS 14.8.9 (AppleClang 15) and
+macOS 15.7.9 (AppleClang 17), both "Apple M1 (Virtual)". The library and ahprst needed no
+change for M1 or the older macOS and compilers.
