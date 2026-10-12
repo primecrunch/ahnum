@@ -1,0 +1,43 @@
+diff --git a/src/neon.c b/src/neon.c
+index 15af8d8..2e6f4be 100644
+--- a/src/neon.c
++++ b/src/neon.c
+@@ -810,6 +810,21 @@ static void norm_rows(ahn_ctx *ctx, neon_state *st, double *d, double *carr, uin
+ 
+ // Pass 1, phase A for thread t: the first group of the range is normalised
+ // with carry-in 0 and kept as unweighted digits; the others are completed.
++// EXPERIMENT (AHN_EXP_TOUCH=1): read each group into L1 before its inverse stages; the read
++// is charged to "p1 phase b". Not for merging.
++static int exp_touch = -1;
++static void touch_group(neon_state *st, double *d, uint32_t g) {
++    if (exp_touch < 0) exp_touch = getenv("AHN_EXP_TOUCH") != NULL;
++    if (!exp_touch) return;
++    const char *b = (const char *)d + g * 128;
++    uint64_t acc = 0;
++    for (uint32_t r = 0; r < st->R; r++) {
++        const uint64_t *q = (const uint64_t *)(b + r * st->rowstride);
++        acc += q[0] ^ q[8];
++    }
++    __asm__ volatile("" ::"r"(acc));
++}
++
+ static void pass1_a(void *arg, int t, int n) {
+     neon_state *st = arg;
+     ahn_ctx *ctx = st->ctx;
+@@ -818,12 +833,16 @@ static void pass1_a(void *arg, int t, int n) {
+     (void)n;
+     int prof = prof_enabled();
+     PROF_T(t);
++    touch_group(st, d, g0);
++    PROF_MARK(t, PR_P1_B);
+     group_inv(st, d, g0);
+     PROF_MARK(t, PR_P1_INV);
+     memset(carr, 0, R * sizeof(double));  // mode b takes its carry-in from the array
+     norm_rows(ctx, st, d, carr, g0, 0, R, 1, &maxerr);
+     PROF_MARK(t, PR_P1_NORM);
+     for (uint32_t g = g0 + 1; g < g1; g++) {
++        touch_group(st, d, g);
++        PROF_MARK(t, PR_P1_B);
+         group_inv(st, d, g);
+         PROF_MARK(t, PR_P1_INV);
+         if (g == NG - 1) {

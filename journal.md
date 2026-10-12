@@ -1193,3 +1193,22 @@ cache footprint, p1 inverse stages, normaliser and radix-16 items in that order.
 On reflection the cache-footprint item goes to the bottom of the list: the under-load profile
 is the evidence against it. Next is the pass-1 inverse stages, the largest phase (18.6% under
 load) and at ~80% of the FP limit against 95% for the forward stages of the same pass.
+
+## 2026-10-12 21:05 — Pass-1 inverse stages: the gap is the group load
+
+The inverse stages are the first to touch each pass-1 group after pass 2, so their first stage
+loads the group's 12 KB (96 rows × 128 B, 4224-byte stride) from L2; the forward stages run on
+data the normaliser has just left in L1. A temporary switch read each group into L1 before
+its inverse stages (results stay correct; the read was charged to the "phase b" bucket).
+One core, `ahbench time 9001 662695 --iters 20000`, three alternating pairs, quiet machine:
+
+| | p1 inverse | p1 forward | read | total |
+|---|---|---|---|---|
+| normal | 20.42–20.53 µs | 18.93–19.03 | — | 114.0–114.7 |
+| read first | 18.41–18.45 | 18.96–19.00 | 2.87–2.89 | 114.9–115.3 |
+
+On hot data the inverse stages are as fast as the forward ones, so there is nothing to fix in
+their code. The cold load costs them 2.1 µs; doing it separately costs 2.9 µs, so the stages
+already hide part of it. The ceiling is 2.1 µs (1.8%) even if the load were free, below the 3%
+bar. Dropped; the patch is in `docs/experiments/p1-touch-before-inverse.patch`. The "80% of the
+FP limit" figure was this load, not slow kernels. The normaliser is next.

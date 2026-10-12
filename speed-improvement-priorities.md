@@ -21,18 +21,13 @@ p1 inverse (1.92×) and pass-2 rows in/out (1.90×) slow most, so their shares g
 p1 inverse 18.6%, normaliser 15.8%, rows in + out 14.2%. The ranking below follows it. 14 tests is
 the right count: 12 sustain ~6% less (see Tried and dropped).
 
-1. **Pass-1 inverse stages (80% of the FP limit, 18% of the time).** The forward stages of the same
-   pass reach 95%. Closing the gap would be ~3% of a squaring. Start by finding where the
-   inverse stages lose time: the deferred first-group carry fix-up, the twiddle order, or stage
-   order. `AHN_PROF` per stage would show it.
-
-2. **Normaliser (80% of its limit, 17% of the time).** After the in-place rewrite it is still
+1. **Normaliser (80% of its limit, 17% of the time).** After the in-place rewrite it is still
    tied to the carry-chain latency (fmla → frintn per digit). More chains in flight (4 → 8) or
    splitting each group's carries across two independent halves with a fix-up, as pass 1 does
    between threads, would give ~2–3% if it reaches the FP limit. Check first that it is still
    latency-bound at 2650 MHz, where the latency is the same in cycles but the time is longer.
 
-3. **Fewer FP operations: radix-16 stages.** Kernels already run at 80–95% of the FP limit,
+2. **Fewer FP operations: radix-16 stages.** Kernels already run at 80–95% of the FP limit,
    so larger gains need less work, not faster work. At 49152 the pass-2 rows (C = 256) could be
    16 × 16 instead of three radix-8/4 stages, and the pass-1 columns (R = 96) 16 × 6. Fewer
    stages means one less load/store sweep, and fewer twiddle multiplies per point ((r−1)/r per
@@ -41,7 +36,7 @@ the right count: 12 sustain ~6% less (see Tried and dropped).
    ops of a prototype kernel with `tools/count_ops.py` before building the rest: the target is
    ≥5% fewer ops in the stages it replaces (~2–3% of a squaring).
 
-4. **Per-test cache footprint, for the E-cluster and under the power cap.** Each test streams
+3. **Per-test cache footprint, for the E-cluster and under the power cap.** Each test streams
    ~3 MB per squaring from L2, about half of it tables (four-step 393 KB, normaliser 1.15 MB).
    The P-clusters have 16 MB of L2 for 5 tests each, but the E-cluster has 4 MB for 4 tests,
    so E-core tests probably go to the SLC every squaring. The L1-resident-tables bound
@@ -81,6 +76,13 @@ Below the bar on its own:
 - Exact fixed-point IBDWT weights, allowing a shorter FFT: −6% (`9dca186`).
 
 ## Tried and dropped
+
+- Pass-1 inverse stages (2026-10-12, patch in `docs/experiments/p1-touch-before-inverse.patch`):
+  their gap to the forward stages is the L2 load of each group, not the stages' code. With the
+  group read into L1 first (correct results), the inverse stages take 18.43 µs against 20.5,
+  slightly faster than the forward stages (18.97). The separate read costs 2.9 µs, more than the
+  2.1 µs it saves, so the stages already overlap the load better than a pre-touch does (as the
+  earlier software prefetch also found). Ceiling ~2.1 µs (1.8%) even if the load were free.
 
 - Fewer concurrent tests under the power cap (2026-10-12, 25-minute runs): 12 tests settle at
   344–347 tests/hour against 366–372 for 14. Each test is faster (124.5 s against 137 s) but not
