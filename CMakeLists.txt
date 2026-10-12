@@ -32,6 +32,7 @@ add_library(kitelib STATIC
   src/threads.c
   src/md5.c
   src/prstproof.c
+  src/llr.c
 )
 target_include_directories(kitelib PUBLIC include PRIVATE src)
 set_target_properties(kitelib PROPERTIES OUTPUT_NAME kite)
@@ -71,6 +72,12 @@ add_test(NAME known_residues_threads COMMAND ${CMAKE_SOURCE_DIR}/tests/run_known
 add_test(NAME known_residues_long COMMAND ${CMAKE_SOURCE_DIR}/tests/run_known.sh $<TARGET_FILE:kite> ${CMAKE_SOURCE_DIR}/tests/known_residues.csv 1000000)
 set_tests_properties(known_residues_long PROPERTIES LABELS long)
 add_test(NAME prst_compat COMMAND ${CMAKE_SOURCE_DIR}/tests/prst_compat.sh $<TARGET_FILE:kite-prst>)
+# LLR (Morrison) results checked against PRST 14.0.1888: two primes, composites by RES64
+add_test(NAME llr_prime_3_26459 COMMAND $<TARGET_FILE:kite> llr 3 26459 --expect prime)
+add_test(NAME llr_prime_3_41628 COMMAND $<TARGET_FILE:kite> llr 3 41628 --expect prime)
+add_test(NAME llr_composite_9357_20000 COMMAND $<TARGET_FILE:kite> llr 9357 20000 --expect DC52061161A0DE1C)
+add_test(NAME llr_composite_9357_25000 COMMAND $<TARGET_FILE:kite> llr 9357 25000 --expect 54A27E03D75F2447)
+add_test(NAME llr_composite_33_99999 COMMAND $<TARGET_FILE:kite> llr 33 99999 --expect 3FAF838186E8A836)
 add_test(NAME gerbicz_fault COMMAND $<TARGET_FILE:kite> prp 1203 90001 --fault 50000 --expect 4BE9F1953E350085)
 
 add_executable(kbench tools/kbench.c)

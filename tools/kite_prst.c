@@ -1,5 +1,5 @@
 // kite-prst: a slice of PRST's command line (Fermat tests and proofs of k*2^n-1), on kite.
-// See docs/prst-compat.md. Anything outside that slice (LLR, other forms) is handed to PRST:
+// See docs/prst-compat.md. Anything outside that slice (other forms and options) goes to PRST:
 // $KITE_PRST, or `prst` next to this binary.
 #include <inttypes.h>
 #include <libgen.h>
@@ -76,7 +76,7 @@ typedef struct {
     uint32_t a;
     int threads;
     double progress_secs;
-    int fermat, fft_info, version;
+    int fermat, fft_info, version, llr;
     int proof_op;  // 0 none, 1 save, 2 build, 3 cert
     int proof_count, proof_keep;
     const char *cert_path;
@@ -159,7 +159,11 @@ static int parse(args *A, int argc, char **argv) {
     if (A->version) return 0;
     if (!have_expr) return -1;
     if (A->proof_op == 3) return 0;
-    if (!A->fermat) return 1;  // PRST's default test (LLR)
+    if (!A->fermat) {  // PRST's default test for k*2^n-1: Morrison (LLR)
+        if (A->fft_info || A->proof_op) return 1;
+        A->llr = 1;
+        return 0;
+    }
     if (A->a < 2) return -1;
     return 0;
 }
@@ -346,6 +350,79 @@ static int run_fermat(const args *A) {
 
 // ---- certificate build and check ---------------------------------------------------------
 
+// ---- LLR (Morrison) test ----------------------------------------------------------------
+
+static void llr_progress(void *arg, uint64_t iter, uint64_t total, double maxerr) {
+    progress(arg, iter, total, maxerr);
+}
+
+static void llr_confirm(void *arg, int run) {
+    run_state *R = arg;
+    out("%s result is composite; confirming with run %d at a longer FFT length.\n", R->A->expr,
+        run + 1);
+}
+
+static int run_llr(const args *A) {
+    uint32_t P;
+    uint64_t factor;
+    if (kite_llr_choose_P(A->k, A->n, &P, &factor)) {
+        fprintf(stderr, "kite-prst: no P found for %s\n", A->expr);
+        return 1;
+    }
+    kite_opts o;
+    kite_ctx *ctx = open_ctx(A, &o);
+    if (!ctx) {
+        fprintf(stderr, "kite-prst: cannot set up arithmetic for %s\n", A->expr);
+        return 1;
+    }
+    announce_fft(A, kite_fft_len(ctx));
+    kite_ctx_free(ctx);
+    if (factor) {  // PRST reports this before announcing the test (morrison.cpp:200)
+        out("%s is not prime, divisible by %" PRIu64 ". Time: 0.0 s.\n", A->expr, factor);
+        result_save("%s is not prime, divisible by %" PRIu64 ". Time: 0 s.\n", A->expr, factor);
+        return 0;
+    }
+    out("Morrison (LLR) test of %s, P = %u, Q = -1, complexity = %" PRIu64 ".\n", A->expr, P,
+        A->n);
+    char ckpt[96];
+    snprintf(ckpt, sizeof ckpt, "kite_%u.llr.ckpt", pp_fingerprint(A->k, A->n));
+    uint64_t at;
+    if (kite_llr_checkpoint_iter(ckpt, A->k, A->n, &at) == 0 && at > 0)
+        out("%s restarting at %.1f%%.\n", A->expr, 100.0 * (double)at / (double)(A->n - 1));
+    run_state R = {.A = A};
+    R.t0 = R.last = now();
+    kite_llr_opts lo = {0};
+    lo.fft = o;
+    lo.checkpoint = ckpt;
+    lo.checkpoint_secs = 300;
+    lo.progress = llr_progress;
+    lo.on_confirm = llr_confirm;
+    lo.progress_arg = &R;
+    lo.abort_flag = &abort_flag;
+    kite_llr_result r;
+    int rc = kite_llr(A->k, A->n, &lo, &r);
+    if (rc == KITE_LLR_ABORTED) {
+        out("Terminating...\n");
+        return 1;
+    }
+    if (rc) {
+        out("%s LLR test failed (error %d).\n", A->expr, rc);
+        return 1;
+    }
+    if (r.is_prime) {
+        out("%s is prime! Time: %.1f s.\n", A->expr, r.seconds);
+        result_save("%s is prime! Time: %d s.\n", A->expr, (int)r.seconds);
+    } else {
+        out("%s is not a probable prime. Have you run Fermat test first? RES64: %016" PRIX64
+            ", time: %.1f s.\n",
+            A->expr, r.res64, r.seconds);
+        result_save("%s is not a probable prime. Have you run Fermat test first? RES64: %016" PRIX64
+                    ", time: %d s.\n",
+                    A->expr, r.res64, (int)r.seconds);
+    }
+    return 0;
+}
+
 static int run_build(const args *A) {
     kite_opts o;
     kite_ctx *ctx = open_ctx(A, &o);
@@ -409,5 +486,6 @@ int main(int argc, char **argv) {
     signal(SIGINT, on_signal);
     if (A.proof_op == 2) return run_build(&A);
     if (A.proof_op == 3) return run_cert(&A);
+    if (A.llr) return run_llr(&A);
     return run_fermat(&A);
 }

@@ -1408,3 +1408,44 @@ prototypes build against `libkite.a` and give the right residue. This journal's 
 entries and the patches in `docs/experiments/` keep the old names as written.
 The CMake library target is `kitelib` with output name `kite`, because target names must be
 unique and the command is `kite`.
+
+## 2026-10-12 22:38 — LLR in kite-prst, matching PRST's Morrison test
+
+`kite-prst EXPR -d` now runs the LLR test itself instead of handing it to PRST.
+
+What PRST computes. Its default test for k·2^n − 1 is the "Morrison (LLR) test"
+(`src/morrison.cpp`) with Q = −1, not Riesel's classic u_0 = V_k(P, 1) start. P is the
+smallest P ≥ 1 with Jacobi(P² + 4 | N) ≠ 1, and gcd(4P(P² + 4), N) > 1 is reported as a factor
+before the test is announced; that is why PRST called 1203·2^90001 − 1 "divisible by 5" (P = 1,
+P² + 4 = 5). N is prime iff V_{k·2^(n−1)}(P, −1) ≡ 0, and a composite prints "is not a probable
+prime. Have you run Fermat test first? RES64: X" with X the low 64 bits of that V. A Python
+prototype reproduced PRST's P and RES64 on 9357·2^20000 − 1 and 9357·2^25000 − 1 before any C
+was written.
+
+How kite computes it (`src/llr.c`). V_k by a Lucas ladder on k's bits, then V_2k = V_k² + 2
+(k is odd, so Q^k = −1), then n − 2 steps of V² − 2. The constant ±2 needed a new library
+operation: `kite_add` / `kite_sub` add two numbers element-wise. That is valid because every
+backend stores weighted digits put through linear FFT stages, so the arrays are linear in the
+value; the sum's digits are unbalanced until the next square renormalises them. GMP checks on
+the ref, c2p and NEON backends (and NEON with 4 threads) pass, including a 30-step V² − 2
+chain.
+
+Error handling differs from PRST. Gerbicz checking does not apply to a V² − 2 chain; PRST runs a
+Gerbicz–Li check on the Lucas sequence, which is why its "complexity" is about 2n. kite checks
+round-off on every step and redoes a block from the last verified state with a longer FFT if
+it is too high, and confirms a composite result with a second full run at a longer FFT
+length (a third if they disagree). The asymmetry is the point: an arithmetic error turns a
+prime's 0 into some non-zero value far more often than it lands exactly on 0, and LLR is
+normally run only after a Fermat PRP, so the extra run is almost never paid. The checkpoint
+keeps the earlier runs' RES64s, so a confirmation interrupted by SIGTERM resumes inside the
+confirmation (tested: interrupted at 62% of run 2, resumed, matched without a third run).
+
+Checked against PRST 14.0.1888: primes 3·2^26459 − 1 and 3·2^41628 − 1; composites
+9357·2^20000 − 1 (DC52061161A0DE1C), 9357·2^25000 − 1 (54A27E03D75F2447), 4095·2^70000 − 1
+(6399FFF11BF53EC0) and 33·2^99999 − 1 (3FAF838186E8A836), same P each time; 1203·2^90001 − 1
+divisible by 5. Five of these are now ctest cases (`llr_*`).
+
+The known prime 9001·2^662695 − 1 (P = 1, FFT 48K) came out prime in 177.2 s on one thread
+with the machine under heavy outside load (load average ~46). The primecrunch record for this
+number gives its LLR proof as 407 s on the same Mac, also measured under unknown load, so the
+two are not a benchmark; a quiet comparison is still to do.

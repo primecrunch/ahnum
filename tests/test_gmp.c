@@ -121,6 +121,35 @@ int main(int argc, char **argv) {
         mpz_mod(t, t, N);
         fails += check(ctx, x, t, "mul_small", k, n);
 
+        // add / sub, each followed by a square that renormalises
+        kite_add(ctx, x, y);
+        kite_square(ctx, x);
+        mpz_add(t, t, b);
+        mpz_mul(t, t, t);
+        mpz_mod(t, t, N);
+        fails += check(ctx, x, t, "add+square", k, n);
+        kite_sub(ctx, x, y);
+        mpz_sub(t, t, b);
+        mpz_mod(t, t, N);
+        fails += check(ctx, x, t, "sub", k, n);
+
+        // LLR-style chain: u = 4, then u = u^2 - 2, 30 times
+        {
+            kite_num *two = kite_num_new(ctx);
+            kite_set_u64(ctx, two, 2);
+            kite_set_u64(ctx, x, 4);
+            mpz_set_ui(t, 4);
+            for (int i = 0; i < 30; i++) {
+                kite_square(ctx, x);
+                kite_sub(ctx, x, two);
+                mpz_mul(t, t, t);
+                mpz_sub_ui(t, t, 2);
+                mpz_mod(t, t, N);
+            }
+            fails += check(ctx, x, t, "llr-chain", k, n);
+            kite_num_free(ctx, two);
+        }
+
         // res64 of 3^(2^m)
         kite_set_u64(ctx, x, 3);
         kite_square_n(ctx, x, 30);

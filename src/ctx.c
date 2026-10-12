@@ -333,6 +333,15 @@ void kite_square_n(kite_ctx *ctx, kite_num *x, uint64_t count) {
 void kite_mul(kite_ctx *ctx, kite_num *x, const kite_num *y) { ctx->ops->mul(ctx, x, y); }
 void kite_mul_small(kite_ctx *ctx, kite_num *x, int64_t m) { ctx->ops->mul_small(ctx, x, m); }
 
+// Every backend stores weighted digits put through linear FFT stages, so the arrays add.
+void kite_add(kite_ctx *ctx, kite_num *x, const kite_num *y) {
+    for (size_t i = 0; i < ctx->num_doubles; i++) x->d[i] += y->d[i];
+}
+
+void kite_sub(kite_ctx *ctx, kite_num *x, const kite_num *y) {
+    for (size_t i = 0; i < ctx->num_doubles; i++) x->d[i] -= y->d[i];
+}
+
 // Fold the top region (digits t..L-1 plus carry c at 2^{s_L}) so that it
 // holds a value in [-k*2^m/2, k*2^m/2) (m = n - s_t); returns the amount to
 // add into digit 0.

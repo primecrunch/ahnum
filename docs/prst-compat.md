@@ -21,7 +21,7 @@ a^−2, so RES64 is the low 64 bits of a^(N−1), the same as kite's.
 | Fermat test with proof points | `EXPR -d -fermat a 3 [-t T] -proof save 512` |
 | Certificate build | `EXPR -d -fermat a 3 [-t T] -proof build 512` |
 | Certificate check | `EXPR -d [-t T] -proof cert verify.cert` |
-| LLR (probable primes) | `EXPR -d [-t T]` — handed to PRST |
+| LLR (Morrison) test | `EXPR -d [-t T]` |
 | Benchmark | Fermat test plus `-time progress 5 coarse` |
 | FFT probe | `EXPR -fermat a 3 -fft info` |
 | Version | `-v` |
@@ -52,6 +52,10 @@ spaces and `\r` before the next line. Prefix = `EXPR ` on per-test lines.
     EXPR restarting at 100.0%.                             (build)
     EXPR certificate RES64: XXXXXXXXXXXXXXXX, time: S.s s. (build and cert)
     Verifying certificate of EXPR, complexity = C.         (cert)
+    Morrison (LLR) test of EXPR, P = P, Q = -1, complexity = C.          (LLR)
+    EXPR is prime! Time: S.s s.                                        (LLR)
+    EXPR is not a probable prime. Have you run Fermat test first? RES64: X, time: S.s s.
+    EXPR is not prime, divisible by D. Time: S.s s.                    (LLR, factor of 4P(P^2+4))
     EXPR max roundoff check enabled.                       (cert)
 
 Patterns a caller can rely on: progress `(\d+(\.\d+)?)% (done|total), time per op: [0-9.]+ ms`,
@@ -114,7 +118,7 @@ follow `src/proof.cpp` exactly; `src/prstproof.c` cites the lines it ports.
   A PRST checkpoint left in the directory is ignored; the test starts again.
 - Proof points are written only after the Gerbicz check covering them passes, so an
   interrupted run never leaves an unverified point on disk.
-- Anything outside the table above, LLR included, is handed to PRST: `$KITE_PRST`, or
+- Anything outside the table above is handed to PRST: `$KITE_PRST`, or
   `prst` next to the `kite-prst` binary.
 - Not implemented yet: the roots-of-unity check PRST runs during `-proof build` (a safety
   check on the residue; it does not change any file or RES64), Gerbicz–Li certificates
@@ -131,3 +135,23 @@ builds from its points; kite-prst verifies PRST's certificates. 9001·2^2000003 
 threads each: same RES64 (6B2FB550F09B6CBD), identical
 certificate files (certificate RES64 3B9230016377CE4A), and each program verifies the
 other's certificate.
+
+## LLR (Morrison) test
+
+PRST's default test for k·2^n − 1 is its "Morrison (LLR) test" (`src/morrison.cpp`) with
+Q = −1: P is the smallest P ≥ 1 with Jacobi(P² + 4 | N) ≠ 1; a common factor of 4P(P² + 4)
+and N is reported as a factor before the test starts; otherwise N is prime iff
+V_{k·2^(n−1)}(P, −1) ≡ 0, and the composite RES64 is the low 64 bits of that value. kite
+(`src/llr.c`) computes V_k with a Lucas ladder, then V_2k = V_k² + 2 and n − 2 steps of
+V² − 2, so P, the result and the RES64 agree with PRST's (checked on 3·2^26459 − 1 and
+3·2^41628 − 1, prime; 9357·2^20000 − 1, 9357·2^25000 − 1, 4095·2^70000 − 1 and
+33·2^99999 − 1 by RES64; 1203·2^90001 − 1 divisible by 5).
+
+Error handling differs from PRST's. PRST runs a Gerbicz–Li check on the Lucas sequence, which
+costs about one more multiplication per bit (its "complexity" is ~2n). kite checks round-off
+on every step and redoes a step from the last verified state with a longer FFT when it is too
+high, and confirms a composite result with a second complete run at a longer FFT length (a
+third if the two disagree). An arithmetic error is far more likely to turn a prime's 0 into a
+non-zero value than the reverse, and LLR is normally run only on numbers that passed the
+Fermat test, so the confirmation run is rarely paid. The checkpoint (`kite_FP.llr.ckpt`) keeps
+the earlier runs' RES64s, so a confirmation interrupted by SIGTERM resumes where it stopped.

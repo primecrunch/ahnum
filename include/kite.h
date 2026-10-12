@@ -49,6 +49,11 @@ void kite_square(kite_ctx *ctx, kite_num *x);
 void kite_square_n(kite_ctx *ctx, kite_num *x, uint64_t count);
 void kite_mul(kite_ctx *ctx, kite_num *x, const kite_num *y);   // x = x*y
 void kite_mul_small(kite_ctx *ctx, kite_num *x, int64_t m);   // x = x*m, |m| < 2^20
+// x = x + y and x = x - y. The stored form is linear in the value, so these are element-wise;
+// the result's digits are left unbalanced until the next square or mul renormalises them,
+// so do not chain more than one add or sub between multiplications.
+void kite_add(kite_ctx *ctx, kite_num *x, const kite_num *y);
+void kite_sub(kite_ctx *ctx, kite_num *x, const kite_num *y);
 
 // Largest |rounded - exact| seen since the last reset (0..0.5).
 double kite_max_roundoff(const kite_ctx *ctx);
@@ -105,6 +110,41 @@ typedef struct {
 // Fermat PRP test of k*2^n-1 to the given base. Returns 0 on success (result
 // in *res), negative on failure.
 int kite_prp(uint64_t k, uint64_t n, uint32_t base, const kite_prp_opts *o, kite_prp_result *res);
+
+// ---- LLR (Morrison) test, as PRST computes it ------------------------------------
+
+typedef struct {
+    kite_opts fft;             // backend / FFT length (0 = auto) / threads
+    double max_roundoff;       // 0 = 0.40
+    const char *checkpoint;    // save file path (NULL = none)
+    double checkpoint_secs;    // 0 = 600
+    void (*progress)(void *arg, uint64_t iter, uint64_t total, double maxerr);
+    void (*on_confirm)(void *arg, int run);  // a composite result is being confirmed
+    void *progress_arg;
+    volatile int *abort_flag;  // as for kite_prp; returns KITE_LLR_ABORTED
+} kite_llr_opts;
+
+typedef struct {
+    int is_prime;              // N is prime
+    uint64_t factor;           // non-zero: a small factor found while choosing P
+    uint64_t res64;            // low 64 bits of V_{k*2^(n-1)}(P, -1) when composite
+    uint32_t P;
+    uint32_t fft_len;
+    double maxerr;
+    uint32_t roundoff_retries;
+    uint32_t confirm_runs;     // extra complete runs made to confirm a composite result
+    int resumed;
+    uint64_t resumed_at;
+    double seconds;
+} kite_llr_result;
+
+enum { KITE_LLR_ABORTED = -5 };
+
+// LLR test of k*2^n-1 (k odd, n >= 3) with PRST's choice of P and Q = -1. 0 on success.
+int kite_llr(uint64_t k, uint64_t n, const kite_llr_opts *o, kite_llr_result *res);
+// P as PRST chooses it, and a factor of N found from it (0 if none).
+int kite_llr_choose_P(uint64_t k, uint64_t n, uint32_t *P, uint64_t *factor);
+int kite_llr_checkpoint_iter(const char *path, uint64_t k, uint64_t n, uint64_t *iter);
 
 // Iteration a checkpoint written by kite_prp for this test resumes from. 0 on success.
 int kite_prp_checkpoint_iter(const char *path, uint64_t k, uint64_t n, uint32_t base,

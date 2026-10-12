@@ -115,12 +115,13 @@ static void progress(void *arg, uint64_t i, uint64_t n, double maxerr) {
 static void usage(const char *p) {
     fprintf(stderr,
             "usage: %s prp K N | \"K*2^N-1\" [--expect HEX] [--base B] [--ckpt FILE]\n"
+            "       %s llr K N | \"K*2^N-1\" [--expect HEX|prime] [--ckpt FILE]\n"
             "       %s time K N [--iters N]\n"
             "       %s throughput K N [--configs 10x1,5x2,...] [--secs S]\n"
             "       %s tune LMIN LMAX [--out FILE]\n"
             "options: --backend ref|c2p|neon --fft L --threads T\n"
             "         --order 0..3 (FFT stage order, default from the tuning file)\n",
-            p, p, p, p);
+            p, p, p, p, p);
 }
 
 int main(int argc, char **argv) {
@@ -180,6 +181,37 @@ int main(int argc, char **argv) {
                r.resumed ? "  (resumed)" : "");
         if (expect) {
             int ok = strtoull(expect, 0, 16) == r.res64;
+            printf("%s expected %s\n", ok ? "MATCH" : "MISMATCH", expect);
+            return !ok;
+        }
+        return 0;
+    }
+
+    if (!strcmp(cmd, "llr")) {
+        kite_llr_opts lo = {0};
+        lo.fft = o;
+        lo.checkpoint = po.checkpoint;
+        lo.checkpoint_secs = po.checkpoint_secs;
+        lo.progress = progress;
+        kite_llr_result r;
+        int rc = kite_llr(k, n, &lo, &r);
+        fprintf(stderr, "\r                                        \r");
+        if (rc) {
+            printf("%" PRIu64 "*2^%" PRIu64 "-1  ERROR %d\n", k, n, rc);
+            return 1;
+        }
+        char what[64];
+        if (r.factor) snprintf(what, sizeof what, "divisible by %" PRIu64, r.factor);
+        else if (r.is_prime) snprintf(what, sizeof what, "prime!");
+        else snprintf(what, sizeof what, "composite  RES64 %016" PRIX64, r.res64);
+        printf("%" PRIu64 "*2^%" PRIu64 "-1 is %s  P = %u  FFT %u  %.1f s  maxerr %.4f"
+               "  confirm_runs %u  fft_retries %u%s\n",
+               k, n, what, r.P, r.fft_len, r.seconds, r.maxerr, r.confirm_runs,
+               r.roundoff_retries, r.resumed ? "  (resumed)" : "");
+        if (expect) {
+            int ok = !strcmp(expect, "prime") ? r.is_prime && !r.factor
+                                              : !r.is_prime && !r.factor &&
+                                                    strtoull(expect, 0, 16) == r.res64;
             printf("%s expected %s\n", ok ? "MATCH" : "MISMATCH", expect);
             return !ok;
         }

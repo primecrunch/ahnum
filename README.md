@@ -37,10 +37,12 @@ Options: `--threads T`, `--fft L` (force a length), `--order 0..3` (force an FFT
 
 ## PRST-compatible CLI (`kite-prst`)
 
-`build/kite-prst` accepts a subset of PRST's command line for k·2^n − 1: Fermat tests, `-proof save/build/cert` and progress output, with checkpoints on SIGTERM.
-Other tests, LLR included, are passed to PRST (`$KITE_PRST`, or `prst` next to
-`kite-prst`). Proof points, products and certificates are byte-identical to PRST 14.0's, and each
-program verifies the other's certificates; see `docs/prst-compat.md`.
+`build/kite-prst` accepts a subset of PRST's command line for k·2^n − 1: Fermat tests,
+`-proof save/build/cert`, the LLR (Morrison) test, and progress output, with checkpoints on
+SIGTERM. Other tests and options are passed to PRST (`$KITE_PRST`, or `prst` next to
+`kite-prst`). Proof points, products and certificates are byte-identical to PRST 14.0's, each
+program verifies the other's certificates, and LLR gives PRST's P, verdict and RES64; see
+`docs/prst-compat.md`.
 
 ```sh
 build/kite-prst "9001*2^2000003-1" -d -fermat a 3 -proof save 512
