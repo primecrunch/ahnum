@@ -333,7 +333,7 @@ while [ -e "$report" ]; do
     report="$PWD/kite-bench-$chip_short-$(date +%Y-%m-%d)-$i.md"; i=$((i + 1))
 done
 {
-    say "### kite vs PRST — $chip (${pcores}P+${ecores}E, $mem_gb GB), macOS $macos"
+    say "**kite vs PRST — $chip (${pcores}P+${ecores}E, $mem_gb GB), macOS $macos**"  # bold, not a heading: the forum does not render headings
     say ""
     if [ $quiet = yes ]; then
         say "kite $kite_version · PRST $prst_version (Rosetta) · quiet machine: $noise · $minutes min"

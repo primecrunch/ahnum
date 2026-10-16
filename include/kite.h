@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-#define KITE_VERSION "0.1.2"
+#define KITE_VERSION "0.1.3"
 
 typedef struct kite_ctx kite_ctx;
 typedef struct kite_num kite_num;

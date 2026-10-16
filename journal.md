@@ -1596,3 +1596,9 @@ member has offered an M2, an M5 and an M6). The edit went through the forum's ow
 would have re-formatted the Markdown table and code block. The forum's renderer starts a new
 numbered list after a code block, even an indented one, so the commands sit below the
 three steps instead of inside step 2.
+
+## 2026-10-16 20:39 — kite 0.1.3: the report has no heading
+
+The primecrunch forum does not render Markdown headings, so the report's first line
+(`### kite vs PRST — ...`) would have shown its hashes. It is now a bold line. Tables, bold
+and inline code render there, so nothing else in the report changes.
