@@ -1584,3 +1584,15 @@ during them). Fermat one test 90.9 s / 73.0 s (1.25×), LLR one test 132.6 s / 4
 Fermat 14 tests 341/h / 413/h, LLR 14 tests 234/h / 655/h. Every figure is within about 1% of
 the first run, so one run per machine is enough for the README table. The second report
 replaced the first (same chip and date in the file name); a repeat run now gets -2, -3, ....
+
+## 2026-10-16 20:37 — Volunteers asked to run kite-bench (forum thread 82)
+
+kite 0.1.2 is out with the report-naming fix. The OP of primecrunch forum thread 82 ("Apple
+Silicon Replacement for prst and gwnum") now has the two-line instructions, what the script
+downloads and checks, what the report contains, the M4 Pro results table and why LLR is
+faster. Machines wanted: macOS older than the current release, and M1, M2, M5 and M6 (one
+member has offered an M2, an M5 and an M6). The edit went through the forum's own
+`PUT /v2/forum/threads` from a logged-in browser tab, because the editor is rich text and
+would have re-formatted the Markdown table and code block. The forum's renderer starts a new
+numbered list after a code block, even an indented one, so the commands sit below the
+three steps instead of inside step 2.
