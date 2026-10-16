@@ -122,6 +122,14 @@ typedef struct {
     void (*on_confirm)(void *arg, int run);  // a composite result is being confirmed
     void *progress_arg;
     volatile int *abort_flag;  // as for kite_prp; returns KITE_LLR_ABORTED
+    // Testing hooks. A fault corrupts the value after doubling inject_fault_at (1-based, 0 =
+    // never) in each run whose bit is set in inject_fault_runs (0 = run 0 only). A round-off
+    // fault makes run 0's first check at or after doubling inject_roundoff_at (or the check
+    // after the Lucas ladder, with inject_roundoff_ladder) fail once.
+    uint64_t inject_fault_at;
+    uint32_t inject_fault_runs;
+    uint64_t inject_roundoff_at;
+    int inject_roundoff_ladder;
 } kite_llr_opts;
 
 typedef struct {
@@ -144,7 +152,8 @@ enum { KITE_LLR_ABORTED = -5 };
 int kite_llr(uint64_t k, uint64_t n, const kite_llr_opts *o, kite_llr_result *res);
 // P as PRST chooses it, and a factor of N found from it (0 if none).
 int kite_llr_choose_P(uint64_t k, uint64_t n, uint32_t *P, uint64_t *factor);
-int kite_llr_checkpoint_iter(const char *path, uint64_t k, uint64_t n, uint64_t *iter);
+// Iteration and run (0 = first, 1-2 = confirmation) a checkpoint resumes from; run may be NULL.
+int kite_llr_checkpoint_iter(const char *path, uint64_t k, uint64_t n, uint64_t *iter, int *run);
 
 // Iteration a checkpoint written by kite_prp for this test resumes from. 0 on success.
 int kite_prp_checkpoint_iter(const char *path, uint64_t k, uint64_t n, uint32_t base,

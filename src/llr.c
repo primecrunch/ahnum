@@ -132,7 +132,7 @@ static int ckpt_read(const char *path, llr_hdr *h, uint64_t *x, size_t nl) {
     return fnv(x, nl * 8, c) == s ? 0 : -1;
 }
 
-int kite_llr_checkpoint_iter(const char *path, uint64_t k, uint64_t n, uint64_t *iter) {
+int kite_llr_checkpoint_iter(const char *path, uint64_t k, uint64_t n, uint64_t *iter, int *run) {
     FILE *f = fopen(path, "rb");
     if (!f) return -1;
     llr_hdr h;
@@ -141,6 +141,7 @@ int kite_llr_checkpoint_iter(const char *path, uint64_t k, uint64_t n, uint64_t 
     fclose(f);
     if (!ok) return -1;
     *iter = h.iter;
+    if (run) *run = (int)h.run;
     return 0;
 }
 
@@ -197,6 +198,9 @@ static int llr_run(uint64_t k, uint64_t n, uint32_t P, const kite_llr_opts *o, u
     double maxround = o->max_roundoff > 0 ? o->max_roundoff : 0.40;
     double ck_secs = o->checkpoint_secs > 0 ? o->checkpoint_secs : 600;
     uint64_t total = n - 1;  // doublings
+    // testing hooks fire once per run, not again on a round-off redo
+    int fault_due = o->inject_fault_at && ((o->inject_fault_runs ? o->inject_fault_runs : 1u) >> run & 1);
+    int roundoff_due = run == 0 && (o->inject_roundoff_at || o->inject_roundoff_ladder);
     for (int attempt = 0;; attempt++) {
         kite_ctx *ctx = kite_ctx_new(k, n, -1, &fo);
         if (!ctx) return -1;
@@ -209,6 +213,8 @@ static int llr_run(uint64_t k, uint64_t n, uint32_t P, const kite_llr_opts *o, u
         kite_set_u64(ctx, c2, 2);
         uint64_t vi = 0;
         llr_hdr h;
+        int rc = 0, round_fail = 0;
+        int have_state = 0;  // vx holds a verified value at iteration vi
         if (o->checkpoint && ckpt_read(o->checkpoint, &h, vx, nl) == 0 && h.k == k && h.n == n &&
             h.P == P && h.run == (uint64_t)run && h.iter <= total) {
             vi = h.iter;
@@ -217,25 +223,42 @@ static int llr_run(uint64_t k, uint64_t n, uint32_t P, const kite_llr_opts *o, u
                 res->resumed_at = vi;
             }
             kite_set_limbs(ctx, x, vx);
+            have_state = 1;
         } else {
+            // The ladder's round-off is checked like a block's: a bad V_k would otherwise be
+            // carried into the doublings, and with a checkpoint into every redo after them.
+            kite_reset_roundoff(ctx);
             lucas_vk(ctx, k, x, v1, cP, c2);
-            kite_get_limbs(ctx, x, vx);
+            double e = kite_max_roundoff(ctx);
+            if (e > res->maxerr) res->maxerr = e;
+            if (e > maxround || (roundoff_due && o->inject_roundoff_ladder)) {
+                roundoff_due = 0;
+                round_fail = 1;
+            } else {
+                kite_get_limbs(ctx, x, vx);
+                have_state = 1;
+            }
         }
-        int rc = 0, round_fail = 0;
         double last_ck = now();
         uint64_t i = vi;
         const uint64_t B = 1000;  // iterations between in-memory verified states
-        while (i < total) {
+        while (!round_fail && i < total) {
             kite_reset_roundoff(ctx);
             uint64_t stop = i + B < total ? i + B : total;
             for (; i < stop; i++) {
                 kite_square(ctx, x);
                 if (i == 0) kite_add(ctx, x, c2);  // V_2k = V_k^2 + 2 (k odd)
                 else kite_sub(ctx, x, c2);
+                if (fault_due && i + 1 == o->inject_fault_at) {
+                    kite_debug_corrupt(ctx, x);
+                    fault_due = 0;
+                }
             }
             double e = kite_max_roundoff(ctx);
             if (e > res->maxerr) res->maxerr = e;
-            if (e > maxround) {
+            if (e > maxround ||
+                (roundoff_due && o->inject_roundoff_at && stop >= o->inject_roundoff_at)) {
+                roundoff_due = 0;
                 round_fail = 1;
                 break;
             }
@@ -268,8 +291,8 @@ static int llr_run(uint64_t k, uint64_t n, uint32_t P, const kite_llr_opts *o, u
             free(vx);
             return rc;
         }
-        // redo from the last verified state with a longer FFT
-        if (o->checkpoint) {
+        // redo from the last verified state with a longer FFT (from the ladder if it failed)
+        if (o->checkpoint && have_state) {
             h = (llr_hdr){{'K', 'I', 'T', 'E', 'L', 'L', 'R', '1'}, k, n, P, vi, nl, L, (uint64_t)run,
                           {prev[0], prev[1]}};
             ckpt_write(o->checkpoint, &h, vx);
@@ -303,8 +326,10 @@ int kite_llr(uint64_t k, uint64_t n, const kite_llr_opts *opts, kite_llr_result 
 
     // Run 0 at the chosen length; a non-zero result is confirmed by run 1 at the next longer
     // length, and run 2 at the one after if they disagree. Results compare by RES64.
+    // A run that ends in 0 can be outvoted: a prime whose run 0 went wrong is settled by runs 1
+    // and 2 agreeing on 0, so the verdict comes from the agreeing run, not from run 0.
     uint64_t res64[3] = {0, 0, 0};
-    int zero0 = 0, rc = 0, run = 0;
+    int zero[3] = {0, 0, 0}, rc = 0, run = 0, final = 0;
     uint32_t L = 0;
     {  // resume the run sequence where a checkpoint left it
         llr_hdr h;
@@ -314,6 +339,9 @@ int kite_llr(uint64_t k, uint64_t n, const kite_llr_opts *opts, kite_llr_result 
             run = (int)h.run;
             res64[0] = h.prev[0];
             res64[1] = h.prev[1];
+            // only RES64s are kept; a non-zero value with RES64 0 has probability 2^-64
+            zero[0] = run > 0 && res64[0] == 0;
+            zero[1] = run > 1 && res64[1] == 0;
             if (run > 0) L = (uint32_t)h.fft_len;
         }
         free(tmp);
@@ -327,16 +355,17 @@ int kite_llr(uint64_t k, uint64_t n, const kite_llr_opts *opts, kite_llr_result 
         rc = llr_run(k, n, P, &o, L, run, res64, out, res);
         if (rc) break;
         res64[run] = out[0];
-        if (run == 0) {
-            zero0 = is_zero(out, nl);
-            if (zero0) break;  // prime
-        }
-        if (run == 1 && res64[1] == res64[0]) break;
+        zero[run] = is_zero(out, nl);
+        if (run == 0 && zero[0]) break;  // prime
+#define AGREE(a, b) (res64[a] == res64[b] && zero[a] == zero[b])
+        if (run == 1 && AGREE(1, 0)) break;
         if (run == 2) {
-            if (res64[2] == res64[1]) res64[0] = res64[1];
-            else if (res64[2] != res64[0]) rc = -3;  // three different answers
+            if (AGREE(2, 1)) final = 1;
+            else if (AGREE(2, 0)) final = 0;
+            else rc = -3;  // three different answers
             break;
         }
+#undef AGREE
         uint32_t base = res->fft_len ? res->fft_len : L0;
         L = kite_next_fft_len(base + 1);
         if (!L) {
@@ -346,8 +375,8 @@ int kite_llr(uint64_t k, uint64_t n, const kite_llr_opts *opts, kite_llr_result 
     }
     free(out);
     if (rc == 0) {
-        res->is_prime = zero0;
-        res->res64 = res64[0];
+        res->is_prime = zero[final];
+        res->res64 = res64[final];
     }
     if (o.checkpoint && rc != KITE_LLR_ABORTED) remove(o.checkpoint);
     res->seconds = now() - t0;

@@ -1449,3 +1449,100 @@ The known prime 9001·2^662695 − 1 (P = 1, FFT 48K) came out prime in 177.2 s 
 with the machine under heavy outside load (load average ~46). The primecrunch record for this
 number gives its LLR proof as 407 s on the same Mac, also measured under unknown load, so the
 two are not a benchmark; a quiet comparison is still to do.
+
+## 2026-10-12 23:05 — kite-prst against PRST, one thread
+
+9001·2^662695 − 1, `-d -fermat a 3 -t 1`, alternating runs on the M4 Pro with the distributed
+compute client stopped, each after 60 quiet seconds and thermal pressure 0:
+
+| Run | Program | Time |
+|---|---|---|
+| 1 | kite-prst | 74.5 s |
+| 2 | PRST 14.0.1888 (x86, Rosetta) | 93.5 s |
+| 3 | PRST | 93.4 s |
+| 4 | kite-prst | 75.4 s |
+
+All four report a probable prime. kite-prst is 1.25× faster on one thread (74.5–75.4 s against
+93.4–93.5 s). Run 4 overlapped for about 70 s with a duplicate kite-prst started by mistake
+(on another core, same cluster), so it may read about 1% slow. The pre-flight check before it
+was held up by WindowServer at 36–43% of a core while the screen was in use; the 20% limit was
+set for 14-test runs and is stricter than a one-core test needs.
+
+## 2026-10-16 19:19 — LLR: ready for primecrunch, and a benchmark volunteers can run
+
+How the primecrunch client uses LLR. The server hands out an `llr` job only for a candidate
+that the same client has already found to be a Fermat PRP (`ReserveLlrWork.sql`), so nearly
+every LLR input is prime. The client runs `prst EXPR -d [-t T]`, reads stdout, and takes a
+composite's RES64 as the job's result value; 0 means prime. primecrunch searches only odd k
+below 10,000.
+
+A bug in the composite confirmation. kite accepts a 0 (prime) after one run and confirms a
+non-zero result with a second run at a longer FFT length, and a third if they disagree. The
+verdict was taken from run 0. So a prime whose run 0 went wrong, with runs 1 and 2 agreeing on 0,
+would have printed "is not a probable prime ... RES64: 0000000000000000". The verdict and RES64
+now come from the agreeing runs. The Lucas ladder for V_k also had no round-off check: the
+check after it was reset before the first block. It now has one, and a failed ladder is never
+written to the checkpoint.
+
+Fault tests (`tests/test_llr.c`, ctest `llr_faults`, 4 s). New hooks in `kite_llr_opts`
+corrupt the value at a chosen doubling in chosen runs, or fail a round-off check once. Covered:
+a prime outvoting a bad run 0 (fails on the old code), a composite with run 0 or run 1 wrong,
+three different answers (error -3), a round-off redo in the doublings and in the ladder, with
+and without a checkpoint, a real too-short FFT (7 redos, right answer), an impossible
+round-off limit (gives up with -2), and a stop and resume inside run 0 and inside the
+confirmation.
+
+Against PRST 14.0.1888 at production sizes. Eleven composites with P = 1, 3, 5, 7, 8, 12 and 13,
+k from 1003 to 987,654,321 and n from 454,049 to 1,999,999: identical RES64s. Seven primes
+primecrunch has found (2911·2^333069 − 1, 4299·2^522773 − 1, 4935·2^401257 − 1,
+4935·2^401310 − 1, 6369·2^398211 − 1, 8025·2^347103 − 1, 8333·2^339626 − 1): all prime in both.
+9357·2^1500007 − 1: both report the factor 5. kite also proved 1011·2^4702339 − 1 prime in
+3054 s with 4 threads at FFT length 324K. The same binary gave the same results on a Mac mini
+(base M4, 4P+6E, macOS 27), where the non-GMP ctest set also passes. The one miss is k =
+3,221,225,471: kite takes k < 2^30 only, for Fermat as well.
+
+On the loaded M4 Pro, kite took about 0.4× PRST's time on the primes (32.9 s against 75.1 s,
+71.8 s against 178.9 s) and about the same on composites, which kite runs twice. Not
+benchmarks; the machine was at load ~20.
+
+Why PRST's LLR costs 2n. PRST's `morrison.cpp` computes the Lucas U and V sequences together
+(`LucasUVMulFast`) when its default `CheckStrong` is on. That makes the test an exponentiation
+a Gerbicz–Li check can verify, with 16 check points; carrying U is what doubles the work. With
+`CheckStrong` off it runs V alone (`LucasVMulFast`), which is what kite does. The earlier entry
+put the 2n down to the Gerbicz–Li check itself; the check costs little, the restructuring
+costs 2×. For primecrunch's input (Fermat PRPs) one unchecked run per prime is n against
+PRST's ~2n, and a composite costs 2n in both. Gerbicz–Li would win only where errors are
+common, since it rolls back a block where kite reruns the whole test. Two runs can agree on a
+wrong answer if a fault is systematic, such as a bug in code both runs share; the stronger
+safeguard is on the server: an LLR composite after a Fermat PRP is almost certainly a fault
+and could be sent to another machine.
+
+Progress now only goes forward, as PRST's does: the first run reports 0–99% and any
+confirmation run holds at 99% until the result line. The client would otherwise have shown a
+test going from 100% back to 0%. The "confirming" note moved to stderr.
+
+`tools/kite-bench.sh`: a benchmark for volunteers. It waits for 60 quiet seconds (no other
+process above 20% of a core, all of them under 50%, thermal pressure nominal). If the machine
+stays busy it shows what is busy, grouped by name, with a hint for the primecrunch client,
+Spotlight, backups and browsers, and asks the person to quieten it or type go. It then runs
+PRST and kite alternately, Fermat (`9357*2^650001-1`, RES64 2AB1256594388021, checked with
+both programs) and LLR (`4299*2^522773-1`, prime), one test alone and then one per core, and
+writes a Markdown report with both times, the speed ratio and the residues checked against
+the known answers. The report gives only load average and other processes' CPU %, no process
+names. Testing it on the hot M4 Pro found three hangs or gaps: the cool-down waited for thermal
+pressure 0 forever, a bare `wait` would have waited on the background sampler, and the busy
+list could be empty at the prompt.
+
+Release workflow (`.github/workflows/release.yml`): a tag vX.Y.Z builds and tests on an M1
+runner and publishes the tarball, a copy of `kite-bench.sh` stamped with the version and the
+tarball's SHA-256, and SHA256SUMS. Volunteers run `curl -fsSLO .../kite-bench.sh` and `sh
+kite-bench.sh`; curl downloads carry no quarantine flag, so the unsigned binary runs without
+Gatekeeper prompts, and the script refuses a tarball whose checksum does not match. Tested
+locally with a file:// URL, including a tarball with one byte appended.
+
+The script also downloads PRST 14.0 from its GitHub release (`prst-14.0-mac64.7z`, pinned by
+SHA-256) unless given a path. macOS's own `tar` unpacks 7-Zip, and the binary inside is
+byte-identical to the prst the primecrunch client ships, so every report compares against
+the same PRST whether or not the volunteer runs the client. The archive stores prst without
+its execute bit, which first showed up as a misleading "needs Rosetta" error; the script now
+sets the bit and tests for Rosetta with `arch -x86_64 /usr/bin/true` before blaming it.

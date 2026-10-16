@@ -78,6 +78,10 @@ add_test(NAME llr_prime_3_41628 COMMAND $<TARGET_FILE:kite> llr 3 41628 --expect
 add_test(NAME llr_composite_9357_20000 COMMAND $<TARGET_FILE:kite> llr 9357 20000 --expect DC52061161A0DE1C)
 add_test(NAME llr_composite_9357_25000 COMMAND $<TARGET_FILE:kite> llr 9357 25000 --expect 54A27E03D75F2447)
 add_test(NAME llr_composite_33_99999 COMMAND $<TARGET_FILE:kite> llr 33 99999 --expect 3FAF838186E8A836)
+add_executable(test_llr tests/test_llr.c)
+target_include_directories(test_llr PRIVATE src)
+target_link_libraries(test_llr kitelib)
+add_test(NAME llr_faults COMMAND test_llr)
 add_test(NAME gerbicz_fault COMMAND $<TARGET_FILE:kite> prp 1203 90001 --fault 50000 --expect 4BE9F1953E350085)
 
 add_executable(kbench tools/kbench.c)

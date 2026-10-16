@@ -197,21 +197,24 @@ typedef struct {
     uint32_t fpP;
     uint32_t *pos;
     size_t nlimbs;
+    int run;  // LLR: 0, or 1-2 while confirming a composite result
 } run_state;
 
-static void progress(void *arg, uint64_t iter, uint64_t n, double maxerr) {
-    (void)maxerr;
-    run_state *R = arg;
+static void show_progress(run_state *R, uint64_t iter, double pct) {
     double t = now();
     if (t - R->last < R->A->progress_secs) return;
     double per_op = iter > R->last_iter ? (t - R->last) * 1e3 / (double)(iter - R->last_iter) : 0;
     if (progress_pending) fputs(PROGRESS_BLANK "\r", stdout);
-    printf("%s %.1f%% done, time per op: %.3f ms. \r", R->A->expr, 100.0 * (double)iter / (double)n,
-           per_op);
+    printf("%s %.1f%% done, time per op: %.3f ms. \r", R->A->expr, pct, per_op);
     fflush(stdout);
     progress_pending = 1;
     R->last = t;
     R->last_iter = iter;
+}
+
+static void progress(void *arg, uint64_t iter, uint64_t n, double maxerr) {
+    (void)maxerr;
+    show_progress(arg, iter, 100.0 * (double)iter / (double)n);
 }
 
 static int write_point(void *arg, uint32_t index, uint64_t iter, const uint64_t *limbs) {
@@ -352,14 +355,26 @@ static int run_fermat(const args *A) {
 
 // ---- LLR (Morrison) test ----------------------------------------------------------------
 
+// PRST's progress only goes forward, and callers such as the primecrunch client expect that.
+// The first run counts 0-99%; a confirmation run holds at 99% until the result line.
+#define LLR_FIRST_RUN_PCT 99.0
+
+static double llr_pct(int run, uint64_t iter, uint64_t total) {
+    return run ? LLR_FIRST_RUN_PCT : LLR_FIRST_RUN_PCT * (double)iter / (double)total;
+}
+
 static void llr_progress(void *arg, uint64_t iter, uint64_t total, double maxerr) {
-    progress(arg, iter, total, maxerr);
+    (void)maxerr;
+    run_state *R = arg;
+    show_progress(R, iter, llr_pct(R->run, iter, total));
 }
 
 static void llr_confirm(void *arg, int run) {
     run_state *R = arg;
-    out("%s result is composite; confirming with run %d at a longer FFT length.\n", R->A->expr,
-        run + 1);
+    R->run = run;
+    R->last_iter = 0;  // iterations count from 0 again in the new run
+    fprintf(stderr, "%s result is composite; confirming with run %d at a longer FFT length.\n",
+            R->A->expr, run + 1);
 }
 
 static int run_llr(const args *A) {
@@ -387,8 +402,9 @@ static int run_llr(const args *A) {
     char ckpt[96];
     snprintf(ckpt, sizeof ckpt, "kite_%u.llr.ckpt", pp_fingerprint(A->k, A->n));
     uint64_t at;
-    if (kite_llr_checkpoint_iter(ckpt, A->k, A->n, &at) == 0 && at > 0)
-        out("%s restarting at %.1f%%.\n", A->expr, 100.0 * (double)at / (double)(A->n - 1));
+    int at_run = 0;
+    if (kite_llr_checkpoint_iter(ckpt, A->k, A->n, &at, &at_run) == 0 && (at > 0 || at_run > 0))
+        out("%s restarting at %.1f%%.\n", A->expr, llr_pct(at_run, at, A->n - 1));
     run_state R = {.A = A};
     R.t0 = R.last = now();
     kite_llr_opts lo = {0};

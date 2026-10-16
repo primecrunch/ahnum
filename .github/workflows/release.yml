@@ -1,0 +1,60 @@
+name: release
+
+# Push a tag vX.Y.Z (matching KITE_VERSION in include/kite.h) to build and test kite on an M1
+# runner and publish a GitHub release with:
+#   kite-X.Y.Z-macos-arm64.tar.gz   kite-prst and kite, for macOS 11+ on Apple Silicon
+#   kite-bench.sh                   the benchmark script, pinned to this release's tarball by
+#                                   version and SHA-256, so it downloads and checks it itself
+#   SHA256SUMS
+# Volunteers then need only:
+#   curl -fsSLO https://github.com/primecrunch/kite/releases/latest/download/kite-bench.sh
+#   sh kite-bench.sh
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches KITE_VERSION
+        run: |
+          v=$(sed -n 's/^#define KITE_VERSION "\(.*\)"/\1/p' include/kite.h)
+          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME but KITE_VERSION is $v"; exit 1; }
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+      - name: Install GMP (for the test_gmp checks)
+        run: brew install gmp
+      - name: Build
+        run: cmake -S . -B build && make -C build -j3
+      - name: Test
+        run: cd build && ctest -LE long --output-on-failure
+      - name: Package
+        run: |
+          name=kite-$VERSION-macos-arm64
+          mkdir -p dist/$name
+          cp build/kite-prst build/kite dist/$name/
+          tar -C dist -czf dist/$name.tar.gz $name
+          sha=$(shasum -a 256 dist/$name.tar.gz | cut -d' ' -f1)
+          sed -e "s/@KITE_RELEASE@/$VERSION/" -e "s/@KITE_SHA256@/$sha/" tools/kite-bench.sh > dist/kite-bench.sh
+          grep -q '@KITE_' dist/kite-bench.sh && { echo "placeholder left in kite-bench.sh"; exit 1; }
+          (cd dist && shasum -a 256 $name.tar.gz kite-bench.sh > SHA256SUMS)
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<EOF
+          kite $VERSION for Apple Silicon Macs (macOS 11 or later).
+
+          To compare kite with PRST 14.0 on your Mac (about 30 minutes; the script downloads both programs and checks them against fixed SHA-256 sums; PRST needs Rosetta):
+
+              curl -fsSLO https://github.com/primecrunch/kite/releases/download/$GITHUB_REF_NAME/kite-bench.sh
+              sh kite-bench.sh
+
+          It writes a Markdown report to paste into the primecrunch forum.
+          EOF
+          gh release create "$GITHUB_REF_NAME" --title "kite $VERSION" --notes-file notes.md \
+            dist/kite-$VERSION-macos-arm64.tar.gz dist/kite-bench.sh dist/SHA256SUMS

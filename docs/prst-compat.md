@@ -66,6 +66,10 @@ Patterns a caller can rely on: progress `(\d+(\.\d+)?)% (done|total), time per o
 
 `-v` prints `kite version a.b.c`, not PRST's `PRST version X, GWnum library version Y`.
 
+LLR progress only goes forward, as PRST's does: the first run reports 0–99%, and if a composite
+result needs confirming (see below), progress stays at 99% through the extra runs until the
+result line. A note that a confirmation has started goes to stderr, not stdout.
+
 ## result.txt
 
 One line appended per result, with whole seconds:
@@ -147,11 +151,20 @@ V² − 2, so P, the result and the RES64 agree with PRST's (checked on 3·2^264
 3·2^41628 − 1, prime; 9357·2^20000 − 1, 9357·2^25000 − 1, 4095·2^70000 − 1 and
 33·2^99999 − 1 by RES64; 1203·2^90001 − 1 divisible by 5).
 
-Error handling differs from PRST's. PRST runs a Gerbicz–Li check on the Lucas sequence, which
-costs about one more multiplication per bit (its "complexity" is ~2n). kite checks round-off
-on every step and redoes a step from the last verified state with a longer FFT when it is too
-high, and confirms a composite result with a second complete run at a longer FFT length (a
-third if the two disagree). An arithmetic error is far more likely to turn a prime's 0 into a
+Error handling differs from PRST's. By default (`CheckStrong`) PRST computes the Lucas U and V
+sequences together (`LucasUVMulFast`), which makes the test an exponentiation that a Gerbicz–Li
+check can verify; carrying U is what doubles the work (its "complexity" is ~2n), while the
+check itself is 16 check points. Its unchecked V-only path (`LucasVMulFast`) is what kite runs. kite checks round-off
+on every step, including the Lucas ladder for V_k, and redoes a block from the last verified
+state with a longer FFT when it is too high. It confirms a composite result with a second
+complete run at a longer FFT length, and a third if the two disagree; the verdict and RES64
+come from the two runs that agree, so a prime whose first run went wrong is still reported
+prime. Three different answers end the test with an error and no result. An arithmetic error is far more likely to turn a prime's 0 into a
 non-zero value than the reverse, and LLR is normally run only on numbers that passed the
 Fermat test, so the confirmation run is rarely paid. The checkpoint (`kite_FP.llr.ckpt`) keeps
 the earlier runs' RES64s, so a confirmation interrupted by SIGTERM resumes where it stopped.
+`tests/test_llr.c` (ctest `llr_faults`) drives each of these paths with fault-injection hooks
+in `kite_llr_opts`.
+
+k must be odd and below 2^30 (for the Fermat test too). PRST rewrites an even k (20282·2^4000 − 1 becomes 10141·2^4001 − 1); kite-prst
+does not, and hands the test to PRST. primecrunch searches only odd k.
