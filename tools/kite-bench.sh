@@ -111,7 +111,7 @@ mem_gb=$(( $(sysctl -n hw.memsize) / 1073741824 ))
 macos=$(sw_vers -productVersion)
 
 say "kite $kite_version against PRST $prst_version on $chip (${pcores}P+${ecores}E, $mem_gb GB), macOS $macos"
-say "This takes about 30 minutes. Leave the machine alone while it runs."
+say "This takes 20-40 minutes. Leave the machine alone while it runs."
 say ""
 
 # ---- how busy the machine is --------------------------------------------------------------
@@ -172,8 +172,12 @@ wait_quiet() {  # $1 = seconds of quiet needed
                 printf '\r%60s\r' ""
                 return 0
             fi
-            printf '\rChecking the machine is quiet (%ss of %ss)...   ' \
-                $((now - quiet_since)) "$settle"
+            if [ -n "$b" ]; then
+                top=$(printf '%s\n' "$b" | head -1 | sed 's/^ *//')
+                printf '\r\033[KWaiting for the machine to be quiet; busy now: %s' "$top"
+            else
+                printf '\r\033[KQuiet for %ss of %ss...' $((now - quiet_since)) "$settle"
+            fi
             [ $((now - start)) -ge "$QUIET_TIMEOUT" ] && break
             sleep 5
         done
@@ -200,7 +204,7 @@ wait_quiet() {  # $1 = seconds of quiet needed
 start_sampler() {
     (
         while :; do
-            printf '%s %s\n' "$(load1)" "$(outside | sed -n 's/^total //p')"
+            printf '%s %s\n' "$(load1)" "$(outside | sed -n 's/^total //p')"  # load kept for debugging
             sleep 5
         done
     ) > "$work/samples" 2>/dev/null &
@@ -297,6 +301,7 @@ wait_quiet "$SETTLE"
 say ""
 start_sampler
 t_start=$(date +%s)
+load_start=$(load1)  # before our tests, which the load average would count
 
 for mode in 1 "$ncpu"; do
     for test in Fermat LLR; do
@@ -315,8 +320,9 @@ done
 
 kill "$sampler" 2>/dev/null; sampler=""
 minutes=$(( ($(date +%s) - t_start + 59) / 60 ))
-noise=$(awk '{ if ($1 > pl) pl = $1; s += $2; if ($2 > po) po = $2; n++ }
-    END { if (n) printf "peak load average %.1f, other processes %.0f%% of one core on average (peak %.0f%%)", pl, s / n, po }' "$work/samples")
+noise=$(awk -v l0="$load_start" '{ s += $2; if ($2 > po) po = $2; n++ }
+    END { printf "load average %s before the runs", l0
+          if (n) printf ", other processes %.0f%% of one core on average (peak %.0f%%) during them", s / n, po }' "$work/samples")
 
 # ---- report -------------------------------------------------------------------------------
 

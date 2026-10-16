@@ -54,6 +54,26 @@ PRST is by Pavel Atnashev (https://github.com/patnashev/prst). The proof code in
 `src/prstproof.c` reimplements PRST's proof construction and file format so the two
 interoperate.
 
+### kite vs PRST
+
+`tools/kite-bench.sh` runs both programs on the same Fermat and LLR tests, one test alone and
+then one per core, checks the residues and writes a Markdown report. Each release carries a
+copy that downloads kite and PRST 14.0 and checks their SHA-256s:
+
+```sh
+curl -fsSLO https://github.com/primecrunch/kite/releases/latest/download/kite-bench.sh
+sh kite-bench.sh
+```
+
+| Machine | Test | 1 test: PRST / kite | All cores: PRST / kite | kite vs PRST |
+|---|---|---|---|---|
+| M4 Pro (10P+4E), quiet, 2026-10-16 | Fermat 9357·2^650001−1 | 91.3 s / 73.1 s | 345/h / 410/h (14 tests) | 1.25× alone, 1.19× all cores |
+| | LLR 4299·2^522773−1 | 131.6 s / 47.9 s | 237/h / 655/h (14 tests) | 2.75× alone, 2.76× all cores |
+
+PRST 14.0.1888 runs under Rosetta. On LLR kite does half the work for a prime: PRST computes
+the Lucas U and V sequences together so that a Gerbicz–Li check can verify them, kite computes
+V alone and confirms a composite result with a second run (see `docs/prst-compat.md`).
+
 ## Reference benchmark
 
 ```sh

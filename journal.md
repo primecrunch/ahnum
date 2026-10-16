@@ -1546,3 +1546,33 @@ byte-identical to the prst the primecrunch client ships, so every report compare
 the same PRST whether or not the volunteer runs the client. The archive stores prst without
 its execute bit, which first showed up as a misleading "needs Rosetta" error; the script now
 sets the bit and tests for Rosetta with `arch -x86_64 /usr/bin/true` before blaming it.
+
+## 2026-10-16 20:00 — First full kite-bench run: M4 Pro, quiet
+
+kite 0.1.0 from the GitHub release against PRST 14.0.1888 under Rosetta, run with
+`caffeinate -i sh kite-bench.sh`, the distributed compute client stopped. 19 minutes. Other
+processes used 28% of one core on average, with one burst to 266%.
+
+| Test | Mode | PRST | kite | kite vs PRST |
+|---|---|---|---|---|
+| Fermat 9357·2^650001 − 1 | 1 test | 91.3 s | 73.1 s | 1.25× |
+| LLR 4299·2^522773 − 1 | 1 test | 131.6 s | 47.9 s | 2.75× |
+| Fermat | 14 tests | 145.1 s, 345/h | 122.5 s, 410/h | 1.19× on throughput |
+| LLR | 14 tests | 212.6 s, 237/h | 76.4 s, 655/h | 2.76× on throughput |
+
+Every residue matched the known answer in both programs. The one-test Fermat ratio is the
+same 1.25× measured by hand on 12 October (9001·2^662695 − 1), so the script agrees with the
+manual method. Under full load kite's per-test Fermat time grows 1.68× against PRST's 1.59×,
+so its lead drops from 1.25× to 1.19×: the memory and power limits in priority 1 of the speed
+file cost kite more than PRST. LLR keeps its lead under load: one Mac running kite does the LLR
+work of nearly three running PRST, from half the work per prime (V alone against U and V)
+times the faster squaring.
+
+The report said "quiet machine: peak load average 59.7". The load average counts the
+benchmark's own 14 tests, so it says nothing about outside noise; the report now gives the
+load average from before the runs and the outside-CPU figures from during them. The time
+estimate is now 20–40 minutes rather than 30. While the user's run waited in its quiet
+check, the status line stayed at "0s of 60s" with no reason given; the next version names
+the busiest process while it waits. My own test copy of the script, started at the same
+time, briefly ran PRST alongside it before I stopped it; that could only have delayed the
+quiet check, not the measured runs.
