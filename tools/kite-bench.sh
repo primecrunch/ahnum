@@ -328,6 +328,10 @@ noise=$(awk -v l0="$load_start" '{ s += $2; if ($2 > po) po = $2; n++ }
 
 chip_short=$(printf '%s' "$chip" | sed 's/^Apple //; s/ /-/g')
 report="$PWD/kite-bench-$chip_short-$(date +%Y-%m-%d).md"
+i=2  # a second run the same day gets -2, -3, ... rather than replacing the first report
+while [ -e "$report" ]; do
+    report="$PWD/kite-bench-$chip_short-$(date +%Y-%m-%d)-$i.md"; i=$((i + 1))
+done
 {
     say "### kite vs PRST — $chip (${pcores}P+${ecores}E, $mem_gb GB), macOS $macos"
     say ""

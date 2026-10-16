@@ -1576,3 +1576,11 @@ check, the status line stayed at "0s of 60s" with no reason given; the next vers
 the busiest process while it waits. My own test copy of the script, started at the same
 time, briefly ran PRST alongside it before I stopped it; that could only have delayed the
 quiet check, not the measured runs.
+
+## 2026-10-16 20:29 — kite-bench 0.1.1 rerun: the figures repeat
+
+Same M4 Pro, quiet (load 1.06 before the runs, other processes 41% of one core on average
+during them). Fermat one test 90.9 s / 73.0 s (1.25×), LLR one test 132.6 s / 48.4 s (2.74×),
+Fermat 14 tests 341/h / 413/h, LLR 14 tests 234/h / 655/h. Every figure is within about 1% of
+the first run, so one run per machine is enough for the README table. The second report
+replaced the first (same chip and date in the file name); a repeat run now gets -2, -3, ....
