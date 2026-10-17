@@ -447,16 +447,17 @@ int kite_prp(uint64_t k, uint64_t n, uint32_t base, const kite_prp_opts *opts,
             }
             if (o.progress) o.progress(o.progress_arg, i, n, kite_max_roundoff(s.ctx));
             // Unverified state every u_secs, for a test killed without the chance to stop. It
-            // costs a file write, not B squarings. Points so far are reported with it, so a
-            // resume from it has them; a failed check redoes them and reports them again.
+            // costs a file write, not B squarings. Points so far are reported first, so a resume
+            // from it has them: a kill between the two leaves the older file, and the points are
+            // redone from there. A failed check redoes them and reports them again.
             if (o.checkpoint_unverified && now() - last_u > u_secs && i < check_at) {
-                kite_get_limbs(s.ctx, s.x, la);
-                kite_get_limbs(s.ctx, s.d, lb);
-                ckpt_write(o.checkpoint_unverified, k, n, base, i, kite_fft_len(s.ctx), la, lb, nl);
                 if (pend.count && pending_flush(&pend, &o)) {
                     rc = KITE_PRP_POINT_FAILED;
                     goto out;
                 }
+                kite_get_limbs(s.ctx, s.x, la);
+                kite_get_limbs(s.ctx, s.d, lb);
+                ckpt_write(o.checkpoint_unverified, k, n, base, i, kite_fft_len(s.ctx), la, lb, nl);
                 last_u = now();
             }
         }

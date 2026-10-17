@@ -1756,3 +1756,16 @@ iteration 63,770, restarted at 1.9%.
 
 Cost: one file write per minute per test, 14 tests × 830 KB = about 12 MB a minute, 17 GB a day
 on a fully loaded M4 Pro. Not changed: LLR checkpoints, which are not on this path.
+
+## 2026-10-17 15:14 — 0.1.7: proof points are written before the unverified checkpoint
+
+0.1.6 wrote the unverified checkpoint and then the proof points reached since the last save. A
+kill between the two left a checkpoint at iteration 13,410 with points only up to index 26 on
+disk; the resume skipped the points before 13,410, so 27-34 were never written and
+`pp_save_products` failed with "prst_715692104.proof.32 is missing or corrupt", exit 1, after a
+correct RES64. Caught by `prst_kill` in the clean rebuild after tagging v0.1.6, about one run in
+three: its poll kills as soon as a new unverified file appears, inside that window.
+
+The points are now written first. A kill while they are written leaves the older checkpoint, and
+the points after it are redone and written again. `prst_kill` 12/12 after the change (all 12
+passing by chance on 0.1.6 would be about 1%). v0.1.6 should not be used.
