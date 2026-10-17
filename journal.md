@@ -1794,3 +1794,26 @@ New test, `tests/prst_proof_stop.py` (ctest `prst_proof_stop`): SIGTERM as soon 
 printed, and again once 4 products are on disk; each must stop within 1 s (0.01 s), and the
 rerun must not show progress, must print the result, and must give the uninterrupted raw
 certificate RES64. 0.1.7 fails it (it ignores the stop and finishes). Quick suite 21/21.
+
+## 2026-10-17 19:31 — At n = 3.3M kite loses to PRST on a busy M4: the tables don't fit
+
+primecrunch's Fermat work has moved to n ≈ 3.3M (FFT 256K), and on eagle (M4, 4P + 6E) kite 0.1.8
+ran 5.2 tests per hour where PRST had done about 8. ms per squaring, 2007·2^3322001−1 and
+neighbours, `-t 1`, 60 s per configuration:
+
+| Configuration | kite 0.1.8 (256K) | kite, `KITE_NO_NTAB=1` | PRST 14.0 (240K) |
+|---|--:|--:|--:|
+| 1 test, P-core | 0.708 | 0.787 | 0.706 |
+| 4 tests, P-cores | 0.946 | 0.948 | 0.872 |
+| 10 tests, all cores | 2.03 | 1.56 | 1.30 |
+
+Alone, kite and PRST are level, so the gap is not FP work. From 4 tests to 10, kite gains 0.7
+squarings per ms and PRST 3.1: per E-core kite is about 4× slower. At H = 128K each test streams
+about 10.4 MB per squaring: 2 MB of data, 2 MB of four-step twiddles (`t4`) and 6 MB of normaliser
+table (`ntab`, on for H ≤ 2^17), against an E-cluster L2 of 4 MB for 6 cores. Turning `ntab` off
+alone takes 23% off at 10 tests. The 2026-10-11 tables bound and the 2026-10-12 load profile
+were at FFT 49152, where the same arrays total about 3 MB, so they ranked the footprint last
+correctly for that size. The plan for production sizes is in `docs/large-fft-plan.md`.
+
+`taskpolicy -b` does not isolate E-cores usefully: macOS also lowers their clock (kite 5.8 ms per
+squaring alone), and PRST printed no progress within 60 s under it.

@@ -1,0 +1,10 @@
+# k,n,res64,kite_fft,source
+# Production-size Fermat cases (base 3) from primecrunch, each residue confirmed by a passing
+# certificate verification on another client. kite_fft is the length kite 0.1.8 chooses.
+1021,2300003,4B048439B12B3423,163840,primecrunch PRST 14.0 2026-08-21
+6073,2290815,38C439B2944CD35A,196608,primecrunch PRST 14.0
+2009,3322280,7F4F92B62D7E5381,262144,primecrunch kite 0.1.8 on wolf 2026-10-17
+6767,3322174,AD9A7DE7C795812F,262144,primecrunch PRST 14.0 on eagle 2026-10-17
+999,4000000,BBAD057C725281B3,294912,primecrunch PRST 14.0 2026-08-08
+6119,4838048,A987B4BF44A5BB74,393216,primecrunch PRST 14.0 on wolf
+4813,5500155,D6321DD51FA5FB38,442368,primecrunch PRST 14.0 2026-08-11

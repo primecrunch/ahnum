@@ -13,6 +13,10 @@ pass-2 forward and inverse stages ~11–12% each, split 10%, row transposes in/o
 
 ## Candidates
 
+**Production sizes (FFT 160K–400K) come first:** see `docs/large-fft-plan.md`. At 256K on a
+busy M4, kite is 56% slower than PRST because its tables do not fit in L2. The list below was
+ranked at FFT 49152.
+
 The workload that matters is 14 tests running for hours on a machine that is power-limited
 (P-cores ~2650 MHz and ~31 W sustained, against ~4.2 GHz for one test alone). Profiled under
 that load (2026-10-12), every phase slows by 1.73–1.96× (total 1.87×, 113 → 211 µs per
