@@ -402,7 +402,7 @@ int kite_prp(uint64_t k, uint64_t n, uint32_t base, const kite_prp_opts *opts,
             rc = KITE_PRP_ABORTED;
             goto out;
         }
-        // run up to B blocks, keep d before the last update in t
+        // run up to M blocks, keep d before the latest update in t
         uint64_t check_at = vi + (uint64_t)B * M;
         if (check_at > full) check_at = full;
         while (i < check_at) {
@@ -419,7 +419,9 @@ int kite_prp(uint64_t k, uint64_t n, uint32_t base, const kite_prp_opts *opts,
                 }
                 if (pi < o.npoints && o.points[pi] == i && o.on_point) pending_add(&pend, s.ctx, pi++, s.x);
             }
-            if (i == check_at) kite_copy(s.ctx, s.t, s.d);
+            // t is kept at every block, not only the last of the round, so a stop part way through
+            // can verify up to the block it reached instead of dropping the whole round.
+            kite_copy(s.ctx, s.t, s.d);
             kite_mul(s.ctx, s.d, s.x);
             if (kite_max_roundoff(s.ctx) > maxround) {
                 round_fail = 1;
@@ -427,9 +429,10 @@ int kite_prp(uint64_t k, uint64_t n, uint32_t base, const kite_prp_opts *opts,
             }
             if (o.progress) o.progress(o.progress_arg, i, n, kite_max_roundoff(s.ctx));
         }
-        // Stopped part way through the round: drop the unverified squarings. The check at the top
-        // of the loop then saves the last verified state and returns.
-        if (o.abort_flag && *o.abort_flag) continue;
+        // Stopped part way through the round: verify up to the last block, then save and return
+        // below. A round is about a quarter of the test at n in the millions (B = 1822, M = 455 at
+        // n = 3.3M), so dropping it lost up to 25 minutes per test; the check costs B squarings.
+        int stopping = o.abort_flag && *o.abort_flag;
         if (!round_fail && i > vi) {
             // verify d == x0 * t^(2^B)
             kite_square_n(s.ctx, s.t, B);
@@ -469,9 +472,13 @@ int kite_prp(uint64_t k, uint64_t n, uint32_t base, const kite_prp_opts *opts,
             rc = KITE_PRP_POINT_FAILED;
             goto out;
         }
-        if (o.checkpoint && (now() - last_ck > ck_secs || vi == full)) {
+        if (o.checkpoint && (now() - last_ck > ck_secs || vi == full || stopping)) {
             ckpt_write(o.checkpoint, k, n, base, vi, kite_fft_len(s.ctx), vx, vd, nl);
             last_ck = now();
+        }
+        if (stopping) {
+            rc = KITE_PRP_ABORTED;
+            goto out;
         }
         if (vi >= full) break;
     }

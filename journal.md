@@ -1697,3 +1697,29 @@ non-zero restart and the uninterrupted RES64. It fails on 0.1.3 at the resume ch
 
 Nothing exercised resume before. prst_compat and prst_faults run tests to completion, and the
 Gerbicz fault test recovers inside one process.
+
+## 2026-10-17 14:32 — 0.1.5: a stop saves the block it reached, not the start of the round
+
+Seen on wolf straight after moving the primecrunch client to 0.1.4: all 14 tests stopped cleanly
+on SIGTERM and wrote "KITECKP1" checkpoints, but every header held iteration 0 and the rerun
+started from zero again. Example: 2007·2^3321961−1 stopped at 4.2% and saved iter = 0.
+
+0.1.4 saved only the last Gerbicz-verified state, and a round is B·M squarings. At n = 3,321,961
+that is 1,822 · 455 = 829,010, a quarter of the test and about 25 minutes per test on a loaded
+M4 Pro. A stop before 25% saved nothing; after that it lost on average half a round. The 600 s
+periodic checkpoint has the same limit, since it too can only write verified state.
+
+The Gerbicz check d_m = x0 · d_{m−1}^(2^B) holds at every block boundary, not only at the end of a
+round, as long as t holds d from before the latest update. t is now copied at every block (one
+copy per B squarings), and a stop verifies up to the block it reached, saves that, and exits. The
+check costs B squarings: 1.74 s at n = 3,321,961 on an idle M4 Pro (stopped at 3.7%, restarted at
+3.7%), against the client's 30 s wait before it kills.
+
+`tests/prst_resume.py` now stops at 15%, inside the first round (which ends near 25% at
+n = 200,001), and requires the rerun to restart within 1% of where it stopped. 0.1.4 fails it (no
+restart, as iteration 0 is not reported); 0.1.5 stops in 0.03 s and restarts at 16.8% with the
+uninterrupted RES64. Quick suite 19/19.
+
+Not changed: the periodic checkpoint still waits for a round boundary, so a kill -9 or power loss
+can still lose up to 25 minutes per test at n = 3.3M. Ending a round early when the 600 s timer
+fires would fix that for B squarings per checkpoint (about 0.5% at that n).
