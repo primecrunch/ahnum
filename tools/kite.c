@@ -1,7 +1,8 @@
 // kite: Fermat PRP tests, timing and tuning for Riesel numbers k*2^n-1.
 //
 //   kite prp  K N | "K*2^N-1"  [--expect HEX] [--base B] [--ckpt FILE]
-//                                 [--ckpt-secs S] [--block B] [--fault ITER]
+//                                 [--ckpt-secs S] [--uckpt FILE] [--uckpt-secs S]
+//                                 [--block B] [--fault ITER]
 //   kite time K N [--iters N]
 //   kite throughput K N [--configs 10x1,5x2,...] [--secs S]
 //   kite tune LMIN LMAX [--out FILE]
@@ -153,6 +154,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--base")) base = (uint32_t)atoi(v);
         else if (!strcmp(a, "--ckpt")) po.checkpoint = v;
         else if (!strcmp(a, "--ckpt-secs")) po.checkpoint_secs = atof(v);
+        else if (!strcmp(a, "--uckpt")) po.checkpoint_unverified = v;
+        else if (!strcmp(a, "--uckpt-secs")) po.unverified_secs = atof(v);
         else if (!strcmp(a, "--block")) po.gerbicz_block = (uint32_t)atoi(v);
         else if (!strcmp(a, "--fault")) po.inject_fault_at = strtoull(v, 0, 10);
         else if (!strcmp(a, "--configs")) cfg = v;

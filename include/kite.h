@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-#define KITE_VERSION "0.1.5"
+#define KITE_VERSION "0.1.6"
 
 typedef struct kite_ctx kite_ctx;
 typedef struct kite_num kite_num;
@@ -77,13 +77,19 @@ typedef struct {
     double max_roundoff;       // 0 = 0.40; above this the step is redone with a larger FFT
     const char *checkpoint;    // save file path (NULL = none)
     double checkpoint_secs;    // 0 = 600
+    // Unverified state, written every unverified_secs at a block boundary without a Gerbicz
+    // check, so a test killed outright loses at most that long. A resume uses it if it is ahead
+    // of the verified file; a failed check after it goes back to the verified state. Proof points
+    // up to each save are reported with it, so they may be reported again after a failed check.
+    const char *checkpoint_unverified;  // save file path (NULL = none)
+    double unverified_secs;             // 0 = 60
     void (*progress)(void *arg, uint64_t iter, uint64_t n, double maxerr);
     void *progress_arg;
     uint64_t inject_fault_at;  // testing: corrupt the state at this iteration (0 = never)
     // Proof points: ascending iteration positions (0..n) at which x_i is reported through
-    // on_point, only once a Gerbicz check (or the doubled tail) has verified it. Points at
-    // or before a resumed checkpoint are not reported again. A non-zero return stops the
-    // test with KITE_PRP_POINT_FAILED.
+    // on_point, once a Gerbicz check (or the doubled tail) has verified it, or with an
+    // unverified checkpoint. Points at or before a resumed checkpoint are not reported again.
+    // A non-zero return stops the test with KITE_PRP_POINT_FAILED.
     const uint32_t *points;
     uint32_t npoints;
     int (*on_point)(void *arg, uint32_t index, uint64_t iter, const uint64_t *limbs);

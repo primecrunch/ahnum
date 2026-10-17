@@ -76,6 +76,9 @@ add_test(NAME prst_compat COMMAND ${CMAKE_SOURCE_DIR}/tests/prst_compat.sh $<TAR
 add_test(NAME prst_faults COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/prst_faults.py $<TARGET_FILE:kite-prst>)
 # SIGTERM mid-test: stops within a second, resumes from the checkpoint, same residue
 add_test(NAME prst_resume COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/prst_resume.py $<TARGET_FILE:kite-prst>)
+# SIGKILL inside the first Gerbicz round: resumes from the unverified checkpoint, same residue
+# and proof; a fault before the save is caught on resume
+add_test(NAME prst_kill COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/prst_kill.py $<TARGET_FILE:kite-prst> $<TARGET_FILE:kite>)
 # LLR (Morrison) results checked against PRST 14.0.1888: two primes, composites by RES64
 add_test(NAME llr_prime_3_26459 COMMAND $<TARGET_FILE:kite> llr 3 26459 --expect prime)
 add_test(NAME llr_prime_3_41628 COMMAND $<TARGET_FILE:kite> llr 3 41628 --expect prime)

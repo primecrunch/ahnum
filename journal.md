@@ -1723,3 +1723,36 @@ uninterrupted RES64. Quick suite 19/19.
 Not changed: the periodic checkpoint still waits for a round boundary, so a kill -9 or power loss
 can still lose up to 25 minutes per test at n = 3.3M. Ending a round early when the 600 s timer
 fires would fix that for B squarings per checkpoint (about 0.5% at that n).
+
+## 2026-10-17 15:01 — 0.1.6: an unverified checkpoint every minute, so a kill loses at most a minute
+
+0.1.5 made a SIGTERM stop keep its work, but a SIGKILL, crash or power cut still fell back to the
+last verified file, written only at round ends: a quarter of the test apart, 25 minutes per test
+at n = 3.3M.
+
+Ending rounds early on a timer would bound that, but each check costs B squarings (3.3 s at
+n = 3.3M), so a 600 s timer costs about 0.5%. Instead kite now also writes the current (x, d, i)
+at a block boundary every minute without checking it: one 830 KB file write, no squarings. It is
+safe to resume from because d is the product of every block's x since the start, so the first
+check after the resume covers the squarings before the save as well. A bad unverified file is
+caught there, deleted, and the test goes back to the verified state. Same file format, separate
+file (`kite_<fp>.<a>.u.ckpt`); a resume uses it only when it is ahead of the verified one.
+
+Proof points are reported when they are verified, so a resume from an unverified state would have
+had no record of the points since the last check. Points reached so far are now reported with
+each unverified save. A failed check redoes them and reports them again, overwriting the files.
+
+kite-prst takes PRST's `-time write <sec>` for the interval (default 60, where PRST's write
+interval is its checkpoint interval). The kite CLI has `--uckpt FILE --uckpt-secs S`.
+
+New test, `tests/prst_kill.py` (ctest `prst_kill`): SIGKILLs 9357·2^200001−1 inside the first
+round with saves every 0.2 s, and requires the rerun to restart where it was killed (5.1%) with
+the uninterrupted RES64 and raw certificate RES64; then injects a fault at iteration 5,000, kills
+after a later unverified save, and requires the rerun to fail its first check and still finish
+with the right residue. 0.1.5 fails it: it writes no unverified file. Quick suite 20/20.
+
+At n = 3,321,961 on wolf alongside 14 client tests: kill -9 at 2.0%, unverified file at
+iteration 63,770, restarted at 1.9%.
+
+Cost: one file write per minute per test, 14 tests × 830 KB = about 12 MB a minute, 17 GB a day
+on a fully loaded M4 Pro. Not changed: LLR checkpoints, which are not on this path.

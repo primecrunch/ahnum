@@ -76,6 +76,7 @@ typedef struct {
     uint32_t a;
     int threads;
     double progress_secs;
+    double write_secs;  // unverified checkpoint interval
     int fermat, fft_info, version, llr;
     int proof_op;  // 0 none, 1 save, 2 build, 3 cert
     int proof_count, proof_keep;
@@ -99,6 +100,7 @@ static int parse(args *A, int argc, char **argv) {
     A->a = 3;
     A->threads = 1;
     A->progress_secs = 10;
+    A->write_secs = 60;
     int have_expr = 0;
     for (int i = 1; i < argc; i++) {
         const char *s = argv[i];
@@ -117,13 +119,24 @@ static int parse(args *A, int argc, char **argv) {
                 A->a = (uint32_t)strtoul(NEXT, NULL, 10);
             }
         } else if (!strcmp(s, "-time")) {
-            if (i + 2 < argc && !strcmp(argv[i + 1], "progress")) {
-                i++;
-                A->progress_secs = atof(NEXT);
-                if (i + 1 < argc && !strcmp(argv[i + 1], "coarse")) i++;
-            } else {
-                return 1;
+            // PRST's -time [write <sec>] [progress <sec>] [coarse]; write sets how often the
+            // unverified checkpoint is saved
+            int any = 0;
+            for (;;) {
+                if (i + 2 < argc && !strcmp(argv[i + 1], "write")) {
+                    i++;
+                    A->write_secs = atof(NEXT);
+                } else if (i + 2 < argc && !strcmp(argv[i + 1], "progress")) {
+                    i++;
+                    A->progress_secs = atof(NEXT);
+                } else if (i + 1 < argc && !strcmp(argv[i + 1], "coarse")) {
+                    i++;
+                } else {
+                    break;
+                }
+                any = 1;
             }
+            if (!any) return 1;
         } else if (!strcmp(s, "-fft")) {
             if (!strcmp(NEXT, "info")) A->fft_info = 1;
             else return 1;
@@ -274,12 +287,15 @@ static int run_fermat(const args *A) {
     run_state R = {.A = A, .nlimbs = kite_limbs(ctx)};
     uint32_t fpN = pp_fingerprint(A->k, A->n);
     snprintf(R.prefix, sizeof R.prefix, "prst_%u", fpN);
-    char ckpt[96];
+    char ckpt[96], ckpt_u[96];
     snprintf(ckpt, sizeof ckpt, "kite_%u.%u.ckpt", fpN, A->a);
+    snprintf(ckpt_u, sizeof ckpt_u, "kite_%u.%u.u.ckpt", fpN, A->a);
     kite_prp_opts po = {0};
     po.fft = o;
     po.checkpoint = ckpt;
     po.checkpoint_secs = 300;
+    po.checkpoint_unverified = ckpt_u;
+    po.unverified_secs = A->write_secs;
     po.progress = progress;
     po.progress_arg = &R;
     po.abort_flag = &abort_flag;
@@ -299,10 +315,11 @@ static int run_fermat(const args *A) {
     }
     kite_ctx_free(ctx);
 
-    {  // announce a resume before the test starts, as PRST does
-        uint64_t at;
-        if (kite_prp_checkpoint_iter(ckpt, A->k, A->n, A->a, &at) == 0 && at > 0)
-            out("%s restarting at %.1f%%.\n", A->expr, 100.0 * (double)at / (double)A->n);
+    {  // announce a resume before the test starts, as PRST does; the later of the two files
+        uint64_t at = 0, u = 0;
+        if (kite_prp_checkpoint_iter(ckpt, A->k, A->n, A->a, &at)) at = 0;
+        if (!kite_prp_checkpoint_iter(ckpt_u, A->k, A->n, A->a, &u) && u > at) at = u;
+        if (at > 0) out("%s restarting at %.1f%%.\n", A->expr, 100.0 * (double)at / (double)A->n);
     }
     R.t0 = R.last = now();
     kite_prp_result res;
@@ -318,6 +335,7 @@ static int run_fermat(const args *A) {
         return 1;
     }
     remove(ckpt);
+    remove(ckpt_u);
     char ckpt_md5[128];
     snprintf(ckpt_md5, sizeof ckpt_md5, "%s.md5", ckpt);
     remove(ckpt_md5);

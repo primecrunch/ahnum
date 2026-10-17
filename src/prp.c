@@ -340,6 +340,7 @@ int kite_prp(uint64_t k, uint64_t n, uint32_t base, const kite_prp_opts *opts,
     uint32_t M = o.gerbicz_blocks ? o.gerbicz_blocks : (B / 4 > 8 ? B / 4 : 8);
     double maxround = o.max_roundoff > 0 ? o.max_roundoff : 0.40;
     double ck_secs = o.checkpoint_secs > 0 ? o.checkpoint_secs : 600;
+    double u_secs = o.unverified_secs > 0 ? o.unverified_secs : 60;
 
     prp_state s = {0};
     if (state_new(&s, k, n, o.fft)) {
@@ -350,17 +351,30 @@ int kite_prp(uint64_t k, uint64_t n, uint32_t base, const kite_prp_opts *opts,
     uint64_t *la = calloc(nl, 8), *lb = calloc(nl, 8);
     uint64_t *vx = calloc(nl, 8), *vd = calloc(nl, 8);  // last verified x, d
     uint64_t vi = 0;                                     // last verified iteration
+    uint64_t *ux = NULL, *ud = NULL, ui = 0;             // unverified state to resume from
     int rc = 0;
     pending_points pend = {0};
 
     power_start(&s, k, base, la);
     kite_get_limbs(s.ctx, s.x0, vx);
     memcpy(vd, vx, nl * 8);
-    if (o.checkpoint) {
-        uint32_t L = 0;
-        if (!ckpt_read(o.checkpoint, k, n, base, &vi, &L, vx, vd, nl)) {
-            res->resumed = 1;
-            if (L > kite_fft_len(s.ctx)) {
+    {
+        uint32_t L = 0, uL = 0;
+        if (o.checkpoint && !ckpt_read(o.checkpoint, k, n, base, &vi, &L, vx, vd, nl)) res->resumed = 1;
+        // The unverified file is newer than the verified one unless a check has passed since it
+        // was written. It is used only if it is ahead; the first check after it covers the
+        // squarings before it was saved too, as d is the product of every block's x since the
+        // start, so a bad one is caught and the test goes back to the verified state.
+        if (o.checkpoint_unverified) {
+            ux = calloc(nl, 8);
+            ud = calloc(nl, 8);
+            if (ckpt_read(o.checkpoint_unverified, k, n, base, &ui, &uL, ux, ud, nl) || ui <= vi) ui = 0;
+            else {
+                res->resumed = 1;
+                if (uL > L) L = uL;
+            }
+        }
+        if (L > kite_fft_len(s.ctx)) {
                 kite_opts fo = o.fft;
                 fo.fft_len = L;
                 state_free(&s);
@@ -369,14 +383,13 @@ int kite_prp(uint64_t k, uint64_t n, uint32_t base, const kite_prp_opts *opts,
                     goto out;
                 }
                 power_start(&s, k, base, la);
-            }
         }
     }
     uint64_t full = n / B * B;  // Gerbicz-protected part
-    double last_ck = now();
+    double last_ck = now(), last_u = last_ck;
     int consecutive_fail = 0;
-    res->resumed_at = vi;
-    uint32_t vp = 0;  // next point not yet reported
+    res->resumed_at = ui ? ui : vi;
+    uint32_t vp = 0, up = 0;  // next point not yet reported from vi, and from ui
     if (o.on_point) {
         while (vp < o.npoints && o.points[vp] < vi + (vi > 0)) vp++;
         if (vp < o.npoints && o.points[vp] == 0) {  // x_0 = base^k, checked by power_start
@@ -387,14 +400,19 @@ int kite_prp(uint64_t k, uint64_t n, uint32_t base, const kite_prp_opts *opts,
                 goto out;
             }
         }
+        // points up to an unverified save were reported when it was written
+        up = vp;
+        while (up < o.npoints && o.points[up] < ui + 1) up++;
     }
     for (;;) {
-        // (re)start from the verified state
-        kite_set_limbs(s.ctx, s.x, vx);
-        kite_set_limbs(s.ctx, s.d, vd);
+        // (re)start from the verified state, or the first time from an unverified one if ahead
+        int from_u = ui > vi;
+        kite_set_limbs(s.ctx, s.x, from_u ? ux : vx);
+        kite_set_limbs(s.ctx, s.d, from_u ? ud : vd);
         kite_reset_roundoff(s.ctx);
-        uint64_t i = vi;
-        uint32_t pi = vp;
+        uint64_t start = from_u ? ui : vi, i = start;
+        uint32_t pi = from_u ? up : vp;
+        ui = 0;  // used once: a failure below goes back to the verified state
         int failed = 0, round_fail = 0;
         pending_clear(&pend);
         if (o.abort_flag && *o.abort_flag) {
@@ -403,7 +421,7 @@ int kite_prp(uint64_t k, uint64_t n, uint32_t base, const kite_prp_opts *opts,
             goto out;
         }
         // run up to M blocks, keep d before the latest update in t
-        uint64_t check_at = vi + (uint64_t)B * M;
+        uint64_t check_at = start + (uint64_t)B * M;
         if (check_at > full) check_at = full;
         while (i < check_at) {
             // A round is B*M squarings, minutes at n in the millions, so a stop request is read
@@ -428,12 +446,26 @@ int kite_prp(uint64_t k, uint64_t n, uint32_t base, const kite_prp_opts *opts,
                 break;
             }
             if (o.progress) o.progress(o.progress_arg, i, n, kite_max_roundoff(s.ctx));
+            // Unverified state every u_secs, for a test killed without the chance to stop. It
+            // costs a file write, not B squarings. Points so far are reported with it, so a
+            // resume from it has them; a failed check redoes them and reports them again.
+            if (o.checkpoint_unverified && now() - last_u > u_secs && i < check_at) {
+                kite_get_limbs(s.ctx, s.x, la);
+                kite_get_limbs(s.ctx, s.d, lb);
+                ckpt_write(o.checkpoint_unverified, k, n, base, i, kite_fft_len(s.ctx), la, lb, nl);
+                if (pend.count && pending_flush(&pend, &o)) {
+                    rc = KITE_PRP_POINT_FAILED;
+                    goto out;
+                }
+                last_u = now();
+            }
         }
         // Stopped part way through the round: verify up to the last block, then save and return
         // below. A round is about a quarter of the test at n in the millions (B = 1822, M = 455 at
         // n = 3.3M), so dropping it lost up to 25 minutes per test; the check costs B squarings.
         int stopping = o.abort_flag && *o.abort_flag;
-        if (!round_fail && i > vi) {
+        if (stopping && i == start) continue;  // nothing new to verify; saved at the top
+        if (!round_fail && i > start) {
             // verify d == x0 * t^(2^B)
             kite_square_n(s.ctx, s.t, B);
             kite_mul(s.ctx, s.t, s.x0);
@@ -441,6 +473,8 @@ int kite_prp(uint64_t k, uint64_t n, uint32_t base, const kite_prp_opts *opts,
             else failed = !nums_equal(s.ctx, s.t, s.d, la, lb);
         }
         if (kite_max_roundoff(s.ctx) > res->maxerr) res->maxerr = kite_max_roundoff(s.ctx);
+        // An unverified save from this round, or the one resumed from, may hold the error.
+        if ((round_fail || failed) && o.checkpoint_unverified) remove(o.checkpoint_unverified);
         if (round_fail) {
             // redo from the verified state with the next larger FFT length
             uint32_t L = kite_fft_len(s.ctx);
@@ -542,5 +576,7 @@ out:
     free(lb);
     free(vx);
     free(vd);
+    free(ux);
+    free(ud);
     return rc;
 }
