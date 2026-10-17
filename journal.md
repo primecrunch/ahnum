@@ -1663,3 +1663,8 @@ GitHub warned that `actions/checkout@v4` targets Node.js 20, which runners now f
 Node.js 24. Checkout v5, v6 and v7 all declare `node24`; both workflows now use v7. Its one
 behaviour change blocks checking out fork PRs under `pull_request_target` and
 `workflow_run`, which neither workflow uses. checkout is the only action either uses.
+
+## 2026-10-17 10:26 — Ignore .cache/
+
+`.cache/` holds clangd's index, built locally by the editor's language server. Added to
+`.gitignore` so it stops showing as untracked.

@@ -3,3 +3,4 @@ build/
 *.ckpt.tmp
 .DS_Store
 docs/primecrunch-openapi.yaml
+.cache/
