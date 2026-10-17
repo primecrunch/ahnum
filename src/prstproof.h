@@ -42,9 +42,12 @@ uint64_t pp_res64(const pp_giant *g);
 
 // `prefix` is "prst_<fp>" in the working directory.
 // Save step: points 0..count are on disk; writes the products and returns the raw
-// certificate RES64. Deletes points 1..count-1 unless keep.
+// certificate RES64. Deletes points 1..count-1 unless keep. Products already on disk from an
+// interrupted run are used, not recomputed. When *abort_flag becomes non-zero it stops between
+// points and returns PP_ABORTED, leaving the points and the products finished so far.
+enum { PP_ABORTED = -2 };
 int pp_save_products(kite_ctx *ctx, uint64_t k, uint64_t n, uint32_t a, int count,
-                     const char *prefix, int keep, uint64_t *raw_res64);
+                     const char *prefix, int keep, volatile int *abort_flag, uint64_t *raw_res64);
 // Build step: checks point 0 = a^k, writes prefix.cert, returns the certificate RES64.
 // Deletes points 0 and count and the products unless keep.
 int pp_build_cert(kite_ctx *ctx, uint64_t k, uint64_t n, uint32_t a, int count,

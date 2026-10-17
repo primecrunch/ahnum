@@ -315,7 +315,7 @@ static int depth_of(int count) {
 // ---- save: compress the points into products (ProofSave::execute, proof.cpp:549) -----
 
 int pp_save_products(kite_ctx *ctx, uint64_t k, uint64_t n, uint32_t a, int count,
-                     const char *prefix, int keep, uint64_t *raw_res64) {
+                     const char *prefix, int keep, volatile int *abort_flag, uint64_t *raw_res64) {
     uint32_t fpN = pp_fingerprint(k, n), fpP = pp_proof_fingerprint(k, n, a);
     int t = depth_of(count), rc = -1;
     uint32_t *pos = malloc((count + 1) * sizeof *pos);
@@ -331,7 +331,33 @@ int pp_save_products(kite_ctx *ctx, uint64_t k, uint64_t n, uint32_t a, int coun
     pp_to_num(ctx, &g, Y);
     pp_giant_free(&g);
 
-    for (int i = 0; i < t; i++) {
+    // Products from an interrupted run: Y and the challenges follow from them and Y_0 alone, one
+    // power per product, so the levels they finish are not redone. The tree is rebuilt at the
+    // start of each level, so nothing else carries over.
+    int first = 0;
+    for (; first < t; first++) {
+        char path[4096];
+        int32_t it;
+        snprintf(path, sizeof path, "%s.prod.%d", prefix, first);
+        if (pp_read(path, PP_TYPE_PRODUCT, fpP, &it, &dg, 1) != 0) break;
+        if (it != first) {
+            pp_giant_free(&dg);
+            break;
+        }
+        pp_to_num(ctx, &dg, D);
+        pp_from_num(ctx, Y, &yg);
+        h[first] = challenge(fpN, &yg, &dg);
+        pp_giant_free(&yg);
+        pp_giant_free(&dg);
+        power(ctx, h[first], T, D);
+        kite_mul(ctx, Y, T);
+    }
+
+    for (int i = first; i < t; i++) {
+        if (abort_flag && *abort_flag) {
+            rc = PP_ABORTED;
+            goto out;
+        }
         if (i == 0) {
             if (read_value(prefix, "proof", count / 2, PP_TYPE_VALUE, fpP, (int32_t)pos[count / 2], &g))
                 goto out;
@@ -339,6 +365,12 @@ int pp_save_products(kite_ctx *ctx, uint64_t k, uint64_t n, uint32_t a, int coun
             pp_giant_free(&g);
         } else {
             for (int j = 0; j < (1 << i); j++) {
+                // The last level is half the work, minutes at n in the millions, so a stop is
+                // read at every point; the level is redone from its start.
+                if (abort_flag && *abort_flag) {
+                    rc = PP_ABORTED;
+                    goto out;
+                }
                 int idx = (1 + j * 2) << (t - i - 1);
                 if (read_value(prefix, "proof", idx, PP_TYPE_VALUE, fpP, (int32_t)pos[idx], &g)) goto out;
                 pp_to_num(ctx, &g, D);

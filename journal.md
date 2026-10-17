@@ -1769,3 +1769,28 @@ three: its poll kills as soon as a new unverified file appears, inside that wind
 The points are now written first. A kill while they are written leaves the older checkpoint, and
 the points after it are redone and written again. `prst_kill` 12/12 after the change (all 12
 passing by chance on 0.1.6 would be about 1%). v0.1.6 should not be used.
+
+## 2026-10-17 16:09 — 0.1.8: a stop while compressing the proof keeps the result and the products
+
+Seen on eagle: the primecrunch client stopped while 8 tests at n ≈ 3.32M had printed their
+result and were compressing 512 proof points. kite read no stop request during compression, the
+client killed them after its 30 s wait, and the results were recorded with no certificate.
+
+Compression is 9 levels of challenge powers over the points, about 63k multiplications whatever
+n is (4.3 s at n = 200,001, 0.068 ms each), so about 2 minutes at n = 3.3M on a loaded M4. The
+last level is about half of it.
+
+- `pp_save_products` reads the stop request at every level and at every point within a level,
+  and returns `PP_ABORTED` leaving the points and the finished products. On a rerun it uses the
+  products already on disk: Y and the challenges follow from point `count` and the products, one
+  power each, and the tree is rebuilt at the start of each level, so nothing else needs saving. A
+  half-written product fails its md5 and is redone.
+- kite-prst writes `kite_<fp>.<a>.done` (k, n, a, RES64, PRP flag, test time) when a test with
+  `-proof save` finishes, before removing its checkpoints. A rerun that finds it prints the
+  result again without repeating the test, finishes the compression, and removes it. The result
+  is not appended to result.txt a second time.
+
+New test, `tests/prst_proof_stop.py` (ctest `prst_proof_stop`): SIGTERM as soon as the result is
+printed, and again once 4 products are on disk; each must stop within 1 s (0.01 s), and the
+rerun must not show progress, must print the result, and must give the uninterrupted raw
+certificate RES64. 0.1.7 fails it (it ignores the stop and finishes). Quick suite 21/21.

@@ -79,6 +79,9 @@ add_test(NAME prst_resume COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/test
 # SIGKILL inside the first Gerbicz round: resumes from the unverified checkpoint, same residue
 # and proof; a fault before the save is caught on resume
 add_test(NAME prst_kill COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/prst_kill.py $<TARGET_FILE:kite-prst> $<TARGET_FILE:kite>)
+# SIGTERM while compressing the proof: stops within a second, the rerun skips the test and
+# finishes the proof from the products written
+add_test(NAME prst_proof_stop COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/prst_proof_stop.py $<TARGET_FILE:kite-prst>)
 # LLR (Morrison) results checked against PRST 14.0.1888: two primes, composites by RES64
 add_test(NAME llr_prime_3_26459 COMMAND $<TARGET_FILE:kite> llr 3 26459 --expect prime)
 add_test(NAME llr_prime_3_41628 COMMAND $<TARGET_FILE:kite> llr 3 41628 --expect prime)

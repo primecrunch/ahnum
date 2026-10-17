@@ -250,6 +250,41 @@ static int write_point(void *arg, uint32_t index, uint64_t iter, const uint64_t 
     return rc;
 }
 
+// The record of a finished Fermat test kept while its proof is compressed: k, n, a, RES64,
+// whether it is a PRP, and the test's time.
+static int done_write(const char *path, const args *A, const kite_prp_result *res) {
+    char tmp[128];
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    FILE *f = fopen(tmp, "w");
+    if (!f) return -1;
+    int ok = fprintf(f, "kite done %" PRIu64 " %" PRIu64 " %u %016" PRIX64 " %d %.1f\n", A->k, A->n,
+                     A->a, res->res64, res->is_prp, res->seconds) > 0;
+    ok &= fclose(f) == 0;
+    if (!ok || rename(tmp, path)) {
+        remove(tmp);
+        return -1;
+    }
+    return 0;
+}
+
+static int done_read(const char *path, const args *A, kite_prp_result *res) {
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    uint64_t k, n, r;
+    unsigned a;
+    int prp;
+    double secs;
+    int ok = fscanf(f, "kite done %" SCNu64 " %" SCNu64 " %u %" SCNx64 " %d %lf", &k, &n, &a, &r, &prp,
+                    &secs) == 6 &&
+             k == A->k && n == A->n && a == A->a;
+    fclose(f);
+    if (!ok) return -1;
+    res->res64 = r;
+    res->is_prp = prp;
+    res->seconds = secs;
+    return 0;
+}
+
 static int run_fermat(const args *A) {
     kite_opts o;
     kite_ctx *ctx = open_ctx(A, &o);
@@ -315,49 +350,67 @@ static int run_fermat(const args *A) {
     }
     kite_ctx_free(ctx);
 
-    {  // announce a resume before the test starts, as PRST does; the later of the two files
-        uint64_t at = 0, u = 0;
-        if (kite_prp_checkpoint_iter(ckpt, A->k, A->n, A->a, &at)) at = 0;
-        if (!kite_prp_checkpoint_iter(ckpt_u, A->k, A->n, A->a, &u) && u > at) at = u;
-        if (at > 0) out("%s restarting at %.1f%%.\n", A->expr, 100.0 * (double)at / (double)A->n);
+    // A test that finished but was stopped while compressing its proof: print the result again
+    // and finish the proof, rather than repeat the test.
+    char done[96];
+    snprintf(done, sizeof done, "kite_%u.%u.done", fpN, A->a);
+    kite_prp_result res = {0};
+    int finished = A->proof_op == 1 && !done_read(done, A, &res);
+    if (!finished) {
+        {  // announce a resume before the test starts, as PRST does; the later of the two files
+            uint64_t at = 0, u = 0;
+            if (kite_prp_checkpoint_iter(ckpt, A->k, A->n, A->a, &at)) at = 0;
+            if (!kite_prp_checkpoint_iter(ckpt_u, A->k, A->n, A->a, &u) && u > at) at = u;
+            if (at > 0) out("%s restarting at %.1f%%.\n", A->expr, 100.0 * (double)at / (double)A->n);
+        }
+        R.t0 = R.last = now();
+        int rc = kite_prp(A->k, A->n, A->a, &po, &res);
+        if (rc == KITE_PRP_ABORTED) {
+            out("Terminating...\n");
+            free(R.pos);
+            return 1;
+        }
+        if (rc) {
+            out("%s test failed (error %d).\n", A->expr, rc);
+            free(R.pos);
+            return 1;
+        }
+        if (A->proof_op == 1 && done_write(done, A, &res)) {
+            out("Write to %s failed.\n", done);
+            free(R.pos);
+            return 1;
+        }
+        remove(ckpt);
+        remove(ckpt_u);
+        char ckpt_md5[128];
+        snprintf(ckpt_md5, sizeof ckpt_md5, "%s.md5", ckpt);
+        remove(ckpt_md5);
     }
-    R.t0 = R.last = now();
-    kite_prp_result res;
-    int rc = kite_prp(A->k, A->n, A->a, &po, &res);
-    if (rc == KITE_PRP_ABORTED) {
-        out("Terminating...\n");
-        free(R.pos);
-        return 1;
-    }
-    if (rc) {
-        out("%s test failed (error %d).\n", A->expr, rc);
-        free(R.pos);
-        return 1;
-    }
-    remove(ckpt);
-    remove(ckpt_u);
-    char ckpt_md5[128];
-    snprintf(ckpt_md5, sizeof ckpt_md5, "%s.md5", ckpt);
-    remove(ckpt_md5);
     double secs = res.seconds;
     if (res.is_prp) {
         out("%s is a probable prime. Time: %.1f s.\n", A->expr, secs);
-        result_save("%s is a probable prime. Time: %d s.\n", A->expr, (int)secs);
+        if (!finished) result_save("%s is a probable prime. Time: %d s.\n", A->expr, (int)secs);
     } else {
         out("%s is not prime. RES64: %016" PRIX64 ", time: %.1f s.\n", A->expr, res.res64, secs);
-        result_save("%s is not prime. RES64: %016" PRIX64 ", time: %d s.\n", A->expr, res.res64,
-                    (int)secs);
+        if (!finished)
+            result_save("%s is not prime. RES64: %016" PRIX64 ", time: %d s.\n", A->expr,
+                        res.res64, (int)secs);
     }
     if (A->proof_op == 1) {
         double t = now();
         kite_ctx *c2 = open_ctx(A, &o);
         uint64_t raw = 0;
         int prc = c2 ? pp_save_products(c2, A->k, A->n, A->a, A->proof_count, R.prefix,
-                                        A->proof_keep, &raw)
+                                        A->proof_keep, &abort_flag, &raw)
                      : -1;
         if (c2) kite_ctx_free(c2);
         free(R.pos);
+        if (prc == PP_ABORTED) {
+            out("Terminating...\n");
+            return 1;
+        }
         if (prc) return 1;
+        remove(done);
         int depth = 0;
         while ((1 << depth) < A->proof_count) depth++;
         out("%s compressed %d points to %d products, time: %.1f s.\n", A->expr, A->proof_count,
