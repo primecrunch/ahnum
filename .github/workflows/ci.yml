@@ -15,7 +15,7 @@ jobs:
         os: [macos-14, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Machine
         run: sw_vers && sysctl -n machdep.cpu.brand_string hw.ncpu
       - name: Install GMP (for the test_gmp checks)

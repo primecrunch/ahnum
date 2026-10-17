@@ -1656,3 +1656,10 @@ errors with the expression and appends every error to `result.txt`, and kite-prs
 neither. PRST's build also reprints the test line, `a^k is correct`, `restarting at
 100.0%` and the test's RES64 before the certificate. The doc had listed `a^k is correct`
 and `restarting at 100.0%` as output kite-prst gives; it does not.
+
+## 2026-10-17 10:05 — CI: actions/checkout v4 to v7
+
+GitHub warned that `actions/checkout@v4` targets Node.js 20, which runners now force onto
+Node.js 24. Checkout v5, v6 and v7 all declare `node24`; both workflows now use v7. Its one
+behaviour change blocks checking out fork PRs under `pull_request_target` and
+`workflow_run`, which neither workflow uses. checkout is the only action either uses.
