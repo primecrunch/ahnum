@@ -46,10 +46,10 @@ spaces and `\r` before the next line. Prefix = `EXPR ` on per-test lines.
     EXPR is not prime, divisible by D.                     (trial division; no RES64)
     EXPR compressed 512 points to 9 products, time: S.s s. (save)
     EXPR raw certificate RES64: XXXXXXXXXXXXXXXX.          (save)
-    Factorizing N-1 for roots of unity check, time: S.s s. (build)
+    Factorizing N-1 for roots of unity check, time: S.s s. (build; PRST only)
     EXPR Building certificate from 9 products.             (build)
-    EXPR a^k is correct. Time: S.s s.                      (build)
-    EXPR restarting at 100.0%.                             (build)
+    EXPR a^k is correct. Time: S.s s.                      (build; PRST only)
+    EXPR restarting at 100.0%.                             (build; PRST only)
     EXPR certificate RES64: XXXXXXXXXXXXXXXX, time: S.s s. (build and cert)
     Verifying certificate of EXPR, complexity = C.         (cert)
     Morrison (LLR) test of EXPR, P = P, Q = -1, complexity = C.          (LLR)
@@ -124,10 +124,25 @@ follow `src/proof.cpp` exactly; `src/prstproof.c` cites the lines it ports.
   interrupted run never leaves an unverified point on disk.
 - Anything outside the table above is handed to PRST: `$KITE_PRST`, or
   `prst` next to the `kite-prst` binary.
-- Not implemented yet: the roots-of-unity check PRST runs during `-proof build` (a safety
-  check on the residue; it does not change any file or RES64), Gerbicz–Li certificates
-  (only made for non-smooth tests, out of scope here), and resuming the
-  product step part-way (it is redone; it takes seconds).
+- `-proof build` runs PRST's roots-of-unity check (`proof.cpp:82`, security 24) before it
+  builds: for a composite result R = a^(N−1), raise R to 2 and to the largest power below
+  2^31 of each odd prime below 2^12 that divides N−1, and refuse to build if that gives 1
+  (`roots of unity check failed.` on stderr). A PRP result is not checked. kite-prst does
+  not print PRST's `Factorizing N-1` line. The check changes no file or RES64.
+  `tests/prst_faults.py` makes it fail with R = −1; a root of unity of odd order cannot be
+  made without the factors of N.
+- Build and certificate output is shorter than PRST's. PRST's `-proof build` also prints the
+  test line, the Gerbicz line, `a^k is correct`, `restarting at 100.0%` and the test's
+  `is not prime. RES64:` (or `is a probable prime`) line again before the certificate; kite-prst
+  prints only `Building certificate` and `certificate RES64:`. Its `-proof cert` does not
+  print the Gerbicz and `max roundoff check enabled` lines.
+- Errors in a build or certificate check (`is missing or corrupt.`, `invalid a^k.`,
+  `roots of unity check failed.`, `Invalid certificate file.`) go to stderr without the
+  `EXPR ` prefix and are not appended to `result.txt`; PRST prefixes the build errors and
+  writes all of them to `result.txt`. Exit status, files left behind and certificate RES64s
+  are the same (`tests/prst_faults.py`).
+- Not implemented yet: Gerbicz–Li certificates (only made for non-smooth tests, out of
+  scope here), and resuming the product step part-way (it is redone; it takes seconds).
 
 - Progress always reads `P% done`. PRST writes `P% stage / Q% total` during a proof save;
   the progress pattern above accepts both.
@@ -139,6 +154,13 @@ builds from its points; kite-prst verifies PRST's certificates. 9001·2^2000003 
 threads each: same RES64 (6B2FB550F09B6CBD), identical
 certificate files (certificate RES64 3B9230016377CE4A), and each program verifies the
 other's certificate.
+
+Damaged files (`tests/prst_faults.py PROG`, passes with both kite-prst and PRST 14.0.1888):
+a product with a stale `.md5`, a wrong header fingerprint or missing; point 0 not equal to
+a^k; R = −1; and a certificate with a stale `.md5` are rejected with exit 1. A product, point
+512 or certificate damaged with its `.md5` updated, R = 1 (a faked probable prime) and a
+certificate with no `.md5` are accepted and give the same certificate RES64 in both programs;
+only a server comparing RES64s catches these.
 
 ## LLR (Morrison) test
 

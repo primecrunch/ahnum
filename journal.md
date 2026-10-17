@@ -1602,3 +1602,57 @@ three steps instead of inside step 2.
 The primecrunch forum does not render Markdown headings, so the report's first line
 (`### kite vs PRST — ...`) would have shown its hashes. It is now a bold line. Tables, bold
 and inline code render there, so nothing else in the report changes.
+
+## 2026-10-17 09:42 — The compat doc said the roots-of-unity check was missing; it is not
+
+Asked whether kite-prst and PRST verify each other's certificates, I answered from
+`docs/prst-compat.md`, which listed PRST's roots-of-unity check as not implemented. Reading
+`src/prstproof.c` showed `roots_of_unity_check` there since the first PRST commit (b41bedc),
+called from `pp_build_cert` before the certificate is built. The doc line was wrong from the
+day it was written.
+
+What the check does: a Fermat test gives R = a^(N−1) mod N, which is 1 for a prime. The
+proof is Pietrzak's VDF construction, whose weak spot in (Z/NZ)* is elements of small order
+(roots of unity), which can be multiplied into values without the verifier's
+random-exponent checks seeing them. PRST defends this twice: the challenge exponents are
+odd and free of primes below 1000, and before building it confirms R is not itself a
+small-order root of unity. Since R's order divides N−1, it raises R to the small-prime part
+of N−1 (2, then each odd prime below 2^12 dividing N−1 to its largest power below 2^31) and
+fails if that gives 1. kite-prst does the same but does not print PRST's
+"Factorizing N-1" line. No test reaches a failing case; the match comes from reading
+`proof.cpp:82`.
+
+The doc now describes the check and marks the Factorizing line as PRST only. Lesson: a
+"not implemented" list needs checking against the code as well as the prose that sits
+beside it.
+
+## 2026-10-17 10:01 — Damaged proof files: kite-prst and PRST fail the same way
+
+The interop tests only ever used good files. `tests/prst_faults.py` (ctest `prst_faults`,
+5 s) makes a good proof set for 1203·2^90001 − 1, damages copies, and checks `-proof build`
+and `-proof cert` against what PRST 14.0.1888 (the primecrunch client's copy) did with the
+same files. Given a prst path instead of kite-prst it runs the whole pipeline through PRST,
+and it passes there too, so the expectations describe PRST and not just kite.
+
+Rejected with exit 1 by both: a product with a stale `.md5`, with a changed header
+fingerprint, or missing (`is missing or corrupt.`); point 0 not equal to a^k
+(`invalid a^k.`); R = a^(N−1) set to −1 (`roots of unity check failed.`); a certificate
+with a stale `.md5` (`Invalid certificate file.`). Both leave the same files behind.
+
+Accepted by both, with the same certificate RES64: a product, point 512 or certificate
+damaged with its `.md5` rewritten, R = 1 (a faked probable prime), and a certificate with
+no `.md5` at all. The `.md5` sidecar is optional and only guards against accidental damage.
+Neither program can tell a damaged file from a good one by itself; the scheme relies on the
+server comparing the builder's certificate RES64 with a verifier's.
+
+One attempt failed: I tried to make R an element of order 139 (139 divides N − 1) as
+g^((N−1)/139). For a composite N that has order 139 only if g^(N−1) = 1, which is exactly
+what fails, and building one needs the factors of N. So the test covers the check through
+R = −1 only. Python's own pow on a 90,000-bit modulus was also too slow for this (killed
+after 9 minutes); GMP took 34 s.
+
+Differences the test does not check, now in docs/prst-compat.md: PRST prefixes build
+errors with the expression and appends every error to `result.txt`, and kite-prst does
+neither. PRST's build also reprints the test line, `a^k is correct`, `restarting at
+100.0%` and the test's RES64 before the certificate. The doc had listed `a^k is correct`
+and `restarting at 100.0%` as output kite-prst gives; it does not.
