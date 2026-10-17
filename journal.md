@@ -1668,3 +1668,32 @@ behaviour change blocks checking out fork PRs under `pull_request_target` and
 
 `.cache/` holds clangd's index, built locally by the editor's language server. Added to
 `.gitignore` so it stops showing as untracked.
+
+## 2026-10-17 13:02 — 0.1.4: Fermat tests resume, and stop within a second of SIGTERM
+
+Seen on wolf, the primecrunch client running kite-prst at n around 2.7M: after "Waiting for prst
+processes to save and stop..." kite took 10 s to nearly 5 minutes to exit, against under a second
+for PRST, so the client's 30 s wait ran out and it killed the tests.
+
+Two bugs, both in every release so far.
+
+- **The stop request was read only between Gerbicz rounds.** A round is B·M squarings
+  (L2 = 814·203 at n = 662,695, about 2 minutes of work at n = 2.7M on a loaded M4 Pro). It is now
+  also read after each block of B squarings; a stop part way through a round drops the unverified
+  squarings and saves the last verified state, as the existing between-rounds stop does. Measured at
+  9001·2^662695−1: 15.6 s to exit before, 0.01 s after.
+- **No Fermat checkpoint was ever read back.** ckpt_write still spelt the magic as the
+  pre-rename project name, "AHNCKPT1", while both readers checked "KITECKP1"; the rename commit
+  (35c9f2a) changed the string literals and missed the character list. Every interrupted test
+  started again from zero, which at n = 3.3M is over an hour per test. Writes now use "KITECKP1",
+  and reads accept both, since the layout is the same, so a test interrupted under 0.1.3 resumes:
+  checked by stopping 9001·2^662695−1 under the 0.1.3 binary and finishing it under 0.1.4
+  ("restarting at 74.8%", PRP as expected). LLR checkpoints ("KITELLR1") were consistent and were
+  never affected.
+
+New test, `tests/prst_resume.py` (ctest `prst_resume`, quick suite): stops 9357·2^200001−1 at 40%
+with progress every half second, requires exit within 1 s, then requires the rerun to report a
+non-zero restart and the uninterrupted RES64. It fails on 0.1.3 at the resume check.
+
+Nothing exercised resume before. prst_compat and prst_faults run tests to completion, and the
+Gerbicz fault test recovers inside one process.

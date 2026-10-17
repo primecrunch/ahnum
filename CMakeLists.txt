@@ -74,6 +74,8 @@ set_tests_properties(known_residues_long PROPERTIES LABELS long)
 add_test(NAME prst_compat COMMAND ${CMAKE_SOURCE_DIR}/tests/prst_compat.sh $<TARGET_FILE:kite-prst>)
 # damaged proof files rejected or mis-verified as PRST 14.0.1888 does
 add_test(NAME prst_faults COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/prst_faults.py $<TARGET_FILE:kite-prst>)
+# SIGTERM mid-test: stops within a second, resumes from the checkpoint, same residue
+add_test(NAME prst_resume COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/prst_resume.py $<TARGET_FILE:kite-prst>)
 # LLR (Morrison) results checked against PRST 14.0.1888: two primes, composites by RES64
 add_test(NAME llr_prime_3_26459 COMMAND $<TARGET_FILE:kite> llr 3 26459 --expect prime)
 add_test(NAME llr_prime_3_41628 COMMAND $<TARGET_FILE:kite> llr 3 41628 --expect prime)

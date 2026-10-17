@@ -160,13 +160,24 @@ typedef struct {
     uint64_t k, n, base, iter, nlimbs, fft_len;
 } ckpt_hdr;
 
+// Written as "KITECKP1". Releases up to 0.1.3 wrote "AHNCKPT1", the project's name before it was
+// kite, while reading only "KITECKP1", so no Fermat test ever resumed. The layout is the same, so
+// both are read and a test interrupted under 0.1.3 picks up where it was.
+static const char CKPT_MAGIC[8] = {'K', 'I', 'T', 'E', 'C', 'K', 'P', '1'};
+static const char CKPT_MAGIC_OLD[8] = {'A', 'H', 'N', 'C', 'K', 'P', 'T', '1'};
+
+static int ckpt_magic_ok(const char magic[8]) {
+    return !memcmp(magic, CKPT_MAGIC, 8) || !memcmp(magic, CKPT_MAGIC_OLD, 8);
+}
+
 static int ckpt_write(const char *path, uint64_t k, uint64_t n, uint32_t base, uint64_t iter,
                       uint32_t fft_len, const uint64_t *x, const uint64_t *d, size_t nl) {
     char tmp[4096];
     snprintf(tmp, sizeof tmp, "%s.tmp", path);
     FILE *f = fopen(tmp, "wb");
     if (!f) return -1;
-    ckpt_hdr h = {{'A', 'H', 'N', 'C', 'K', 'P', 'T', '1'}, k, n, base, iter, nl, fft_len};
+    ckpt_hdr h = {{0}, k, n, base, iter, nl, fft_len};
+    memcpy(h.magic, CKPT_MAGIC, 8);
     uint64_t sum = fnv(&h, sizeof h, 0xcbf29ce484222325ull);
     sum = fnv(x, nl * 8, sum);
     sum = fnv(d, nl * 8, sum);
@@ -186,7 +197,7 @@ static int ckpt_read(const char *path, uint64_t k, uint64_t n, uint32_t base, ui
     if (!f) return -1;
     ckpt_hdr h;
     uint64_t sum = 0;
-    int ok = fread(&h, sizeof h, 1, f) == 1 && !memcmp(h.magic, "KITECKP1", 8) && h.k == k &&
+    int ok = fread(&h, sizeof h, 1, f) == 1 && ckpt_magic_ok(h.magic) && h.k == k &&
              h.n == n && h.base == base && h.nlimbs == nl && fread(x, 8, nl, f) == nl &&
              fread(d, 8, nl, f) == nl && fread(&sum, 8, 1, f) == 1;
     fclose(f);
@@ -239,7 +250,7 @@ int kite_prp_checkpoint_iter(const char *path, uint64_t k, uint64_t n, uint32_t 
     FILE *f = fopen(path, "rb");
     if (!f) return -1;
     ckpt_hdr h;
-    int ok = fread(&h, sizeof h, 1, f) == 1 && !memcmp(h.magic, "KITECKP1", 8) && h.k == k &&
+    int ok = fread(&h, sizeof h, 1, f) == 1 && ckpt_magic_ok(h.magic) && h.k == k &&
              h.n == n && h.base == base;
     fclose(f);
     if (!ok) return -1;
@@ -395,6 +406,10 @@ int kite_prp(uint64_t k, uint64_t n, uint32_t base, const kite_prp_opts *opts,
         uint64_t check_at = vi + (uint64_t)B * M;
         if (check_at > full) check_at = full;
         while (i < check_at) {
+            // A round is B*M squarings, minutes at n in the millions, so a stop request is read
+            // after every block rather than only between rounds. A caller that sends SIGTERM waits
+            // a bounded time and then kills, losing everything since the last checkpoint.
+            if (o.abort_flag && *o.abort_flag) break;
             for (uint32_t j = 0; j < B; j++) {
                 kite_square(s.ctx, s.x);
                 i++;
@@ -412,6 +427,9 @@ int kite_prp(uint64_t k, uint64_t n, uint32_t base, const kite_prp_opts *opts,
             }
             if (o.progress) o.progress(o.progress_arg, i, n, kite_max_roundoff(s.ctx));
         }
+        // Stopped part way through the round: drop the unverified squarings. The check at the top
+        // of the loop then saves the last verified state and returns.
+        if (o.abort_flag && *o.abort_flag) continue;
         if (!round_fail && i > vi) {
             // verify d == x0 * t^(2^B)
             kite_square_n(s.ctx, s.t, B);
